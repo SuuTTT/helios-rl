@@ -1,0 +1,33 @@
+# TD-MPC2 configuration
+name: tdmpc2
+
+# Latent model
+latent_dim: 512
+mlp_dims: [512, 512]
+
+# MPPI planner
+mppi:
+  horizon: 5
+  num_samples: 512
+  num_iterations: 6
+  mixture_coef: 0.05
+  temperature: 0.5
+  momentum: 0.1
+  noise_beta: 2.0
+
+# Training
+batch_size: 256
+utd_ratio: 1             # Update-to-data ratio
+buffer_size: 1_000_000
+
+# Losses
+consistency_loss_weight: 2.0
+reward_loss_weight: 0.5
+value_loss_weight: 0.1
+temporal_coef: 0.5
+
+# Optimizer
+lr: 3.0e-4
+max_grad_norm: 20.0
+gamma: 0.99
+tau: 0.01                # Target network EMA

@@ -1,0 +1,17 @@
+# Default experiment configuration
+defaults:
+  - agent: ppo
+  - env: mujoco
+  - _self_
+
+seed: 42
+total_steps: 1_000_000
+log_interval: 1000
+eval_interval: 10_000
+eval_episodes: 10
+checkpoint_interval: 50_000
+wandb:
+  project: helios-rl
+  entity: null
+  tags: []
+  mode: online  # "disabled" to turn off

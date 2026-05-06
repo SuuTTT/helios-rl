@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.Python
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Linting
+.ruff_cache/
+.mypy_cache/
+
+# JAX / ML artifacts
+*.npy
+*.npz
+*.safetensors
+
+# Weights & Biases
+wandb/
+
+# Hydra outputs
+outputs/
+multirun/
+
+# Logs
+logs/
+*.log
+
+# SLURM output files (committed template, ignore run outputs)
+*.out
+*.err
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Checkpoints
+checkpoints/
+*.ckpt
