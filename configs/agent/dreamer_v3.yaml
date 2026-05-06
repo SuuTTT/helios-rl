@@ -1,0 +1,45 @@
+# DreamerV3 configuration
+name: dreamer_v3
+
+# World model
+rssm:
+  deter_dim: 512         # GRU hidden size
+  stoch_dim: 32          # Stochastic latent dimension
+  stoch_classes: 32      # Categories per stochastic variable
+  hidden_dim: 512        # Hidden layer size for prior/posterior
+  embed_dim: 512
+
+# Encoder / Decoder
+encoder_depth: 48
+decoder_depth: 48
+
+# Training
+batch_size: 16
+batch_length: 64
+train_ratio: 512         # Train steps per environment step
+imagination_horizon: 15
+
+# Losses
+kl_free_nats: 1.0
+kl_alpha: 0.8            # KL balancing factor
+reconstruction_loss_weight: 1.0
+reward_loss_weight: 1.0
+continue_loss_weight: 1.0
+
+# Actor-Critic
+actor_hidden_dims: [512, 512, 512, 512]
+critic_hidden_dims: [512, 512, 512, 512]
+actor_entropy_scale: 3.0e-4
+gamma: 0.997
+gae_lambda: 0.95
+slow_target_fraction: 0.02
+slow_target_update: 1
+
+# Optimizer
+model_lr: 1.0e-4
+actor_lr: 3.0e-5
+critic_lr: 3.0e-5
+model_eps: 1.0e-8
+actor_eps: 1.0e-8
+critic_eps: 1.0e-8
+max_grad_norm: 1000.0

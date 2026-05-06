@@ -1,0 +1,24 @@
+# PPO configuration
+name: ppo
+
+# Network architecture
+hidden_dims: [256, 256]
+activation: tanh
+
+# PPO hyperparameters
+num_envs: 8
+num_steps: 128          # Rollout length per env
+num_minibatches: 4
+update_epochs: 4
+clip_coef: 0.2
+vf_coef: 0.5
+ent_coef: 0.01
+max_grad_norm: 0.5
+gae_lambda: 0.95
+gamma: 0.99
+norm_adv: true
+clip_vloss: true
+
+# Optimizer
+lr: 3.0e-4
+anneal_lr: true
