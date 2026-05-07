@@ -126,12 +126,12 @@ def mppi_plan(
                 ns, _ = imagine_fn(s, a[None], k, dynamics_params)
                 # Remove the leading dim added for broadcasting in imagine_fn
                 ns = jax.tree_util.tree_map(lambda x: x[0], ns)
-                r = reward_fn(jax.tree_util.tree_map(lambda x: x[None], ns))
+                r = reward_fn(jax.tree_util.tree_map(lambda x: x[None], ns), a[None])
                 return ns, r
 
             final_s, rewards = jax.lax.scan(_step, s0, (acts, keys))
             terminal_v = value_fn(
-                jax.tree_util.tree_map(lambda x: x[None], final_s)
+                jax.tree_util.tree_map(lambda x: x[None], final_s), acts[-1][None]
             )
             return jnp.sum(rewards) + terminal_v[0]
 
@@ -214,11 +214,11 @@ def mppi_plan_jit(
             a, k = ha
             ns, _ = imagine_fn(s, a[None], k, dynamics_params)
             ns = jax.tree_util.tree_map(lambda x: x[0], ns)
-            r = reward_fn(jax.tree_util.tree_map(lambda x: x[None], ns))
+            r = reward_fn(jax.tree_util.tree_map(lambda x: x[None], ns), a[None])
             return ns, r
 
         final_s, rewards = jax.lax.scan(_step, s0, (acts, keys))
-        v = value_fn(jax.tree_util.tree_map(lambda x: x[None], final_s))
+        v = value_fn(jax.tree_util.tree_map(lambda x: x[None], final_s), acts[-1][None])
         return jnp.sum(rewards) + v[0]
 
     returns = jax.vmap(_single)(state, actions, all_step_keys)

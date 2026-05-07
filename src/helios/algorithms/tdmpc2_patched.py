@@ -64,6 +64,27 @@ class LatentDynamics(nn.Module):
         )(x)
 
 
+
+class Pi(nn.Module):
+    """Policy prior network."""
+    action_dim: int
+    hidden_dims: tuple[int, ...] = (512, 512)
+    activation: str = "silu"
+
+    @nn.compact
+    def __call__(self, z: jax.Array) -> tuple[jax.Array, jax.Array]:
+        x = z
+        for dim in self.hidden_dims:
+            x = nn.Dense(dim)(x)
+            x = getattr(nn, self.activation)(x)
+            x = nn.LayerNorm()(x)
+        
+        # output mean and log_std
+        mean = nn.Dense(self.action_dim)(x)
+        log_std = nn.Dense(self.action_dim)(x)
+        log_std = jnp.clip(log_std, -10, 2)
+        return mean, log_std
+
 class RewardModel(nn.Module):
     """Predicts reward from (z, action) pair."""
 
@@ -140,6 +161,7 @@ class TDMPCAgent(BaseAgent):
         dynamics = LatentDynamics(latent_dim=latent_dim, hidden_dims=hidden_dims)
         reward_model = RewardModel(hidden_dims=hidden_dims)
         q_fn = QFunction(hidden_dims=hidden_dims)
+        pi_net = Pi(action_dim=action_dim, hidden_dims=hidden_dims)
 
         key, k1, k2, k3, k4 = jax.random.split(key, 5)
         dummy_obs = jnp.zeros((1, obs_dim))
@@ -151,14 +173,20 @@ class TDMPCAgent(BaseAgent):
         rew_params = reward_model.init(k3, dummy_z, dummy_act)
         q_params = q_fn.init(k4, dummy_z, dummy_act)
         target_q_params = q_params  # initialise equal
+        pi_params = pi_net.init(k4, dummy_z)
 
         # Single optimizer for all world model components
+        pi_net = Pi(action_dim=action_dim, hidden_dims=hidden_dims)
+        pi_params = pi_net.init(k4, dummy_z)
+        
         all_params = {
             "encoder": enc_params,
             "dynamics": dyn_params,
             "reward": rew_params,
             "q": q_params,
+            "pi": pi_params,
         }
+
 
         tx = optax.chain(
             optax.clip_by_global_norm(float(cfg.max_grad_norm)),
@@ -175,6 +203,7 @@ class TDMPCAgent(BaseAgent):
             "dynamics": dynamics,
             "reward_model": reward_model,
             "q_fn": q_fn,
+            "pi": pi_net,
             # Params
             "params": all_params,
             "target_q_params": target_q_params,
@@ -301,6 +330,7 @@ class TDMPCAgent(BaseAgent):
             dynamics=state["dynamics"],
             reward_model=state["reward_model"],
             q_fn=state["q_fn"],
+        pi=state["pi"],
             batch=batch,
             gamma=float(cfg.gamma),
             consistency_weight=float(cfg.consistency_loss_weight),
@@ -381,22 +411,10 @@ def _tdmpc_update(
 
         # Value (TD) loss using target Q-network
         z_next_flat = jax.lax.stop_gradient(z_all[:, 1:].reshape(B * (T - 1), -1))
-        # Use a coarse discrete sample as implicit policy prior for value estimation in 1D/small spaces
-        action_dim = a_flat.shape[-1]
-        # Generate 5 bins for actions between -1.0 and +1.0
-        bins = jnp.linspace(-1.0, 1.0, 5)
-        # We broadcast z_next_flat (N, Z) to (N, 5, Z)
-        z_expanded = jnp.broadcast_to(z_next_flat[:, None, :], (z_next_flat.shape[0], 5, z_next_flat.shape[-1]))
-        
-        # Create action matrix (N, 5, A) where we fill bins. For action_dim > 1 this is just uniform on all dims for simplicity
-        a_grid = jnp.zeros((z_next_flat.shape[0], 5, action_dim))
-        a_grid = a_grid + bins[None, :, None]
-        
-        # Evaluate all bins
-        target_q_bins = q_fn.apply(target_q_params["q"], z_expanded, a_grid) # (N, 5, 2)
-        target_v_bins = jnp.min(target_q_bins, axis=-1)  # pessimism
-        target_v = jnp.max(target_v_bins, axis=-1)       # argmax over actions
-
+        # Use a zero action as the "greedy" action for value estimation
+        dummy_a = jnp.zeros_like(a_flat)
+        target_q = q_fn.apply(target_q_params["q"], z_next_flat, dummy_a)
+        target_v = jnp.min(target_q, axis=-1)  # double-Q pessimism
         target_td = symlog(batch.rewards[:, :-1].reshape(B * (T - 1))) + gamma * target_v
 
         q_vals = q_fn.apply(p["q"], z_flat, a_flat)  # (B*(T-1), 2)

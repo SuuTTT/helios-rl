@@ -48,3 +48,25 @@ class ContinuousActorCritic(nn.Module):
         pi = distrax.Normal(loc=action_mean, scale=jnp.exp(actor_logtstd))
         
         return pi, jnp.squeeze(value, axis=-1)
+
+class MLP(nn.Module):
+    output_dim: int
+    hidden_dims: tuple = (512, 512)
+    activation: str = "silu"
+
+    @nn.compact
+    def __call__(self, x):
+        for dim in self.hidden_dims:
+            x = nn.Dense(dim)(x)
+            x = getattr(nn, self.activation)(x)
+        x = nn.Dense(self.output_dim)(x)
+        return x
+
+class NormedLinear(nn.Module):
+    output_dim: int
+
+    @nn.compact
+    def __call__(self, x):
+        x = nn.Dense(self.output_dim)(x)
+        x = nn.LayerNorm()(x)
+        return x

@@ -25,7 +25,6 @@ def run_cleanrl():
         "--ent-coef", "0.01",
         "--vf-coef", "0.5",
         "--max-grad-norm", "0.5",
-        # Default True vars don't need passing
     ]
     
     all_vals = []
@@ -54,19 +53,16 @@ def generate_comparison():
     c_vals, c_time = run_cleanrl()
     print(f"CleanRL Avg Time: {c_time:.2f}s per seed")
     
-    # Process CleanRL Data
     max_steps = 1500000
     common_steps = np.linspace(0, max_steps, num=200)
     
     c_interp_vals = []
     for steps, returns in c_vals:
         if len(steps) > 0:
-            # We sort them because environments return out of order
             d = list(zip(steps, returns))
             d.sort(key=lambda x: x[0])
             steps, returns = zip(*d)
             
-            # Simple moving average to smooth noisy CartPole returns
             window = max(1, len(returns)//50)
             smoothed_returns = np.convolve(returns, np.ones(window)/window, mode='valid')
             smoothed_steps = steps[:len(smoothed_returns)]
@@ -79,7 +75,6 @@ def generate_comparison():
     c_std = np.std(c_interp_vals, axis=0)
     c_ci = 1.96 * (c_std / np.sqrt(len(c_interp_vals)))
     
-    # Run Helios
     import sys
     sys.path.append("/workspace/helios-rl/scripts")
     import jax
@@ -99,28 +94,49 @@ def generate_comparison():
     returns = metrics["returned_episode_returns"]
     dones = metrics["returned_episode"]
     
-    valid_returns = np.where(dones, returns, 0.0)
-    update_means = valid_returns.sum(axis=(2, 3)) / np.maximum(dones.sum(axis=(2, 3)), 1)
+    h_interp_vals = []
+    # Shape of dones is (5, NUM_UPDATES, NUM_STEPS, NUM_ENVS)
+    num_updates = dones.shape[1]
+    num_steps = dones.shape[2]
+    num_envs = dones.shape[3]
     
-    h_update_returns = np.array(update_means)
-    h_mean = h_update_returns.mean(axis=0)
-    h_std = h_update_returns.std(axis=0)
+    for seed_idx in range(5):
+        seed_steps = []
+        seed_returns = []
+        for u in range(num_updates):
+            global_step = (u + 1) * num_envs * num_steps
+            # Get valid returns directly flattened from this block
+            step_dones = dones[seed_idx, u]
+            step_returns = returns[seed_idx, u]
+            v_rets = step_returns[step_dones]
+            if len(v_rets) > 0:
+                for r in v_rets:
+                    seed_steps.append(global_step)
+                    seed_returns.append(r)
+                    
+        if len(seed_steps) > 0:
+            window = max(1, len(seed_returns)//50)
+            smoothed_returns = np.convolve(seed_returns, np.ones(window)/window, mode='valid')
+            smoothed_steps = seed_steps[:len(smoothed_returns)]
+            
+            interp_r = np.interp(common_steps, smoothed_steps, smoothed_returns)
+            h_interp_vals.append(interp_r)
+            
+    h_interp_vals = np.array(h_interp_vals)
+    h_mean = h_interp_vals.mean(axis=0)
+    h_std = h_interp_vals.std(axis=0)
     h_ci = 1.96 * (h_std / np.sqrt(5))
-    h_steps = np.linspace(0, max_steps, len(h_mean))
     
-    # Plotting
     sns.set_theme(style="darkgrid")
     plt.figure(figsize=(10, 6))
     
-    # Plot CleanRL
     plt.plot(common_steps, c_mean, label=f"CleanRL (PyTorch)", color="orange", linewidth=2)
     plt.fill_between(common_steps, c_mean - c_ci, c_mean + c_ci, color="orange", alpha=0.3)
     
-    # Plot Helios
-    plt.plot(h_steps, h_mean, label=f"Helios (JAX)", color="royalblue", linewidth=2)
-    plt.fill_between(h_steps, h_mean - h_ci, h_mean + h_ci, color="royalblue", alpha=0.3)
+    plt.plot(common_steps, h_mean, label=f"Helios (JAX)", color="royalblue", linewidth=2)
+    plt.fill_between(common_steps, h_mean - h_ci, h_mean + h_ci, color="royalblue", alpha=0.3)
     
-    plt.title("PPO CartPole-v1: Helios (JAX) vs CleanRL (PyTorch) - 5 Seeds", fontsize=16)
+    plt.title("PPO CartPole-v1: Helios vs CleanRL - True Episodic Rolling Average", fontsize=16)
     plt.xlabel("Timesteps", fontsize=12)
     plt.ylabel("Mean Episodic Return", fontsize=12)
     plt.legend(loc="lower right")
@@ -129,10 +145,6 @@ def generate_comparison():
     output_path = "/workspace/helios-rl/cartpole_comparison.png"
     plt.savefig(output_path, dpi=300)
     print(f"Saved benchmark plot to: {output_path}")
-    
-    print("\nSummary:")
-    print(f"CleanRL Avg execution time (1 seed): {c_time:.2f}s")
-    print(f"Helios Total execution time (5 seeds): {h_time:.2f}s")
 
 if __name__ == "__main__":
     generate_comparison()
