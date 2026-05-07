@@ -64,3 +64,9 @@ logs/
 # Checkpoints
 checkpoints/
 *.ckpt
+
+# logs
+logs/
+# tensorboard
+runs/
+**/events.out.tfevents.*
