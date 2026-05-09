@@ -78,12 +78,12 @@ def run_sac(env_id: str, seed: int, csv_path: Path, total_timesteps: int | None 
     def progress(num_steps, metrics):
         reward = float(metrics.get("eval/episode_reward", 0.0))
         reward_std = float(metrics.get("eval/episode_reward_std", 0.0))
+        train_sps = float(metrics.get("training/sps", 0.0))
         now = datetime.now()
         elapsed = (now - times[0]).total_seconds()
-        sps = num_steps / elapsed if elapsed > 0 else 0
         print(
             f"  step={num_steps:>10,}  reward={reward:>8.3f}  ±{reward_std:.3f}"
-            f"  sps={sps:>8.0f}  elapsed={elapsed:.0f}s",
+            f"  sps={train_sps:>8.0f}  elapsed={elapsed:.0f}s",
             flush=True,
         )
         writer.writerow([env_id, seed, num_steps, reward])

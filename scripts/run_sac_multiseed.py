@@ -65,8 +65,6 @@ def run_seed(env_id, seed, total_timesteps, extra_args=None):
         sys.executable, str(SCRIPT),
         "--env_id",    env_id,
         "--seed",      str(seed),
-        "--csv_log",   str(csv_path),
-        "--exp_name",  f"sac_{env_tag(env_id)}_s{seed}",
     ]
     if total_timesteps:
         cmd += ["--total_timesteps", str(total_timesteps)]

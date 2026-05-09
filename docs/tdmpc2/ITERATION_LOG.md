@@ -347,8 +347,148 @@ Implemented changes addressing gaps 2 and 4 from `IMPL_GAP.md`:
 4. Re-adjusted the RL policy generation loss formula targeting `Q_avg` minimization: `pi_loss = -(entropy_coef * scaled_entropy + RunningScale(Q_avg))`.
 5. Re-architected `pi_optim` into its distinct optax state instead of grouping it with model core params.
 
-**Log**: `/tmp/hopper_v6_stoch.log`
-**Status**: Successfully compiled. Training loop natively initiated! 
+**Log**: `/tmp/hopper_v6_stoch.log`  
+**Status**: Successfully compiled. Training loop natively initiated!
+
+---
+
+### v6 Iteration Arc — Stochastizc Policy Debugging
+
+All runs below share the same base architecture (stochastic Gaussian Pi) and attempt to fix convergence issues introduced by the stochastic policy.
+
+#### v6 (original) — Stochastic Pi with entropy_coef=1e-4 + /scale_val bug
+
+**Script**: `train_tdmpc_hopper_v6_stoch_pi.py`  
+**Log**: `/workspace/helios-rl/exp/tdmpc_dmc/train_v6.log`  
+**Changes from v5**: Pi network outputs `(mean, log_std)` tuple; entropy bonus `entropy_coef=1e-4`; policy loss uses `q_pi2_vals / scale_val` to balance entropy and Q signals.
+
+**Results**: Killed at 141K steps. Loss plateau at 0.28–0.49, never converging.
+
+**Root cause 1**: `q_pi2_vals / scale_val` (divides Q by 50) crushes the policy gradient to 1/50th its v5 magnitude. The critic still updates but the actor sees a near-zero signal.
+
+**Root cause 2**: `entropy_coef=1e-4` is negligible — the log_std parameter receives almost no gradient, so the stochastic head is effectively frozen at its init value.
+
+---
+
+#### v6b — TD targets use mean action (not sampled)
+
+**Script**: `train_tdmpc_hopper_v6_stoch_pi.py` (patched in-place)  
+**Log**: `/workspace/helios-rl/exp/tdmpc_dmc/train_v6b.log`  
+**Change**: Use `tanh(mean)` for TD target Q computation instead of a sampled action. Reduces variance in bootstrap targets.
+
+**Results**: Killed at 250K steps. Loss plateau at 0.27–0.35. Marginal improvement over v6 but still not converging.
+
+**Problem**: The `/scale_val` crush on policy gradient was untouched. Lower variance targets help Q but the policy still can't learn through the 50x-weakened gradient.
+
+---
+
+#### v6c — entropy_coef=0.02
+
+**Script**: `train_tdmpc_hopper_v6_stoch_pi.py` (patched in-place)  
+**Log**: `/workspace/helios-rl/exp/tdmpc_dmc/train_v6c.log`  
+**CSV**: `/workspace/helios-rl/exp/tdmpc_dmc/hopper-hop-twohot.csv`  
+**Change**: Raised `entropy_coef` from `1e-4` to `0.02` to give log_std meaningful gradient.
+
+**Results**:
+```
+500K:  pi=171.3  c=0.008 r=0.028 v=0.385 p=-0.521
+1M:    pi=167.9  c=0.006 r=0.034 v=0.374 p=-0.528
+1M:    MPPI=72.8
+```
+
+**Analysis**: Policy is learning (pi=171 vs v5=195) but declining 500K→1M. `p=-0.521` is far weaker than v5's `p=-7.099`. The `/scale_val` crush on `q_pi2_vals` is confirmed as the primary blocker — entropy alone cannot compensate.
+
+---
+
+#### v7 — entropy_coef=0.002 + tanh fixes in act_fn
+
+**Script**: `train_tdmpc_hopper_v7_stoch_pi.py`  
+**Log**: `/workspace/helios-rl/exp/tdmpc_dmc/train_v7.log`  
+**Changes**: `entropy_coef=0.002`; `act_fn_single` and `act_fn_batch` both apply `tanh` to the raw mean output (fixing inconsistency between training and eval).
+
+**Results**:
+```
+500K:  pi=145.0  c=0.006 r=0.041 v=0.379 p=-0.128
+1M:    pi=143.0  c=0.006 r=0.053 v=0.403 p=-0.128
+1M:    MPPI=0.2
+2M:    pi=145.4  MPPI=91.3
+```
+
+**Analysis**: Tanh fix in act_fn helps consistency but `p=-0.128` (vs v5's `p=-7`) confirms policy gradient still crushed. MPPI=0.2 at 1M is catastrophic — world model not providing useful signal for planning. The `/scale_val` issue dominates everything else.
+
+---
+
+#### v8 — Use tanh(mean) for Q in policy loss (not sampled action)
+
+**Script**: `train_tdmpc_hopper_v8_stoch_pi.py`  
+**Log**: `/workspace/helios-rl/exp/tdmpc_dmc/train_v8.log`  
+**Change**: Policy loss uses `Q(z, tanh(mean))` instead of `Q(z, sampled_action)` for the gradient signal; only entropy uses sampled action. `entropy_coef=0.002`, tanh fixes retained.
+
+**Results**:
+```
+500K:  pi=101.8  c=0.009 r=0.028 v=0.399 p=-0.184
+1M:    pi=254.6  c=0.008 r=0.040 v=0.391 p=-0.208
+1M:    MPPI=105.4
+1.5M:  pi=228.2
+2M:    pi=241.7  MPPI=22.0
+```
+
+**Analysis**: 1M pi=254 is competitive but inconsistent — decline to 228 at 1.5M suggests instability. MPPI=22 at 2M is a regression from MPPI=105 at 1M (Q overestimation killing MPPI discriminability). `p=-0.208` still dramatically weaker than v5's `p=-7`. The `/scale_val` crush is the common root cause across all v6–v8.
+
+---
+
+#### v9 — Remove /scale_val from policy loss (KEY FIX)
+
+**Script**: `train_tdmpc_hopper_v9_stoch_pi.py`  
+**Log**: `/workspace/helios-rl/exp/tdmpc_dmc/train_v9.log`  
+**Changes**:
+- **Remove `/ scale_val` from policy loss** — policy gradient now at v5 magnitude
+- **No entropy term** — `log_std` stays fixed at init; isolates the scale_val fix
+- Retain tanh fixes in `act_fn_single` and `act_fn_batch`
+- Use `tanh(mean)` for Q evaluation in policy loss
+
+**Results** (killed at 1.96M steps, process still running at kill time):
+```
+500K:  pi=278.7  c=0.007 r=0.048 v=0.404 p=-8.545
+1M:    pi=291.4  c=0.006 r=0.068 v=0.418 p=-9.670
+1M:    MPPI=156.9
+1.5M:  pi=293.2  c=0.006 r=0.068 v=0.403 p=-9.554
+```
+
+**vs v5 baseline**:
+```
+v5 500K:  pi=195.3, p=-7.099
+v5 1M:    pi=213.3, MPPI=122.1
+v5 1.5M:  pi=217.5
+v9 500K:  pi=278.7  (+43% vs v5)
+v9 1M:    pi=291.4  (+37% vs v5), MPPI=156.9 (+28% vs v5)
+v9 1.5M:  pi=293.2  (+35% vs v5)
+```
+
+**Root cause confirmed**: The `/scale_val` divide in the policy loss (introduced in v6 to "balance" entropy and Q signals) was crippling policy gradient to 1/50th its intended magnitude. Removing it immediately restores v5-level convergence and exceeds v5 performance.
+
+**Why v9 > v5**: v9 uses two-hot distributional Q (from v5) + deterministic mean policy (equivalent to v5's Pi) + proper gradient scale. The slight improvement may be from the stochastic Pi network having higher effective capacity (mean + log_std parameters), even with log_std frozen. Needs further investigation.
+
+**Open issues**:
+- v9 has no entropy gradient — `log_std` is frozen at its initial value. A proper SAC-style entropy bonus with correct scaling (not crushed by `/scale_val`) would be the natural next step.
+- MPPI tanh bug: `plan()` still uses raw (unsquashed) mean in `pi_step` and terminal Q. Fixed in `train_tdmpc_hopper_v10_stoch_pi.py` but not yet run.
+- `v=0.4` plateau is higher than v5's `v=0.447` — distributional Q fitting is harder with stochastic policy sampling noise in the targets.
+
+---
+
+### v6 Arc Summary
+
+| Version | Key Change | pi@500K | pi@1M | MPPI@1M | Outcome |
+|---------|-----------|---------|-------|---------|---------|
+| v5 (baseline) | Deterministic Pi, two-hot | 195.3 | 213.3 | 122.1 | Reference |
+| v6 | Stochastic Pi, entropy=1e-4 | — | — | — | Loss plateau, killed early |
+| v6b | TD targets use mean action | — | — | — | Loss plateau, slight improvement |
+| v6c | entropy=0.02 | 171.3 | 167.9 | 72.8 | Below v5, declining |
+| v7 | entropy=0.002 + tanh in act_fn | 145.0 | 143.0 | 0.2 | Worse; MPPI collapsed |
+| v8 | Use mean for Q in policy loss | 101.8 | 254.6 | 22.0 | Unstable pi, MPPI regression |
+| **v9** | **Remove /scale_val from policy** | **278.7** | **291.4** | **156.9** | **+37-43% vs v5** |
+
+**Key lesson**: The `/scale_val` normalization of policy loss is a fatal mistake. The policy gradient signal must remain at the same order of magnitude as the raw Q values. Never divide the policy gradient by a reward scale — it was introduced to balance entropy and Q, but it effectively sets the actor learning rate to near-zero.
 
 ---
 
