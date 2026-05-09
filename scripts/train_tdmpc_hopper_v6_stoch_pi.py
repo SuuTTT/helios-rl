@@ -21,13 +21,65 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.6")
 
 
-# ─── SimNorm ──────────────────────────────────────────────────────────────────
+# ─── SimNorm and Distributional Math ────────────────────────────────────────
 
 def simnorm(x, V=8):
     s = x.shape
     x = x.reshape(*s[:-1], V, s[-1] // V)
     x = jax.nn.softmax(x, axis=-1)
     return x.reshape(*s)
+
+# --- Stoch Math & Scale ---
+def log_std_fn(x, low=-10.0, dif=12.0):
+    return low + 0.5 * dif * (jnp.tanh(x) + 1.0)
+
+def gaussian_logprob(eps, log_std):
+    residual = -0.5 * (eps ** 2) - log_std
+    log_prob = residual - 0.9189385175704956
+    return jnp.sum(log_prob, axis=-1, keepdims=True)
+
+def squash(mu, pi, log_pi):
+    mu = jnp.tanh(mu)
+    pi = jnp.tanh(pi)
+    squashed_pi = jnp.log(jax.nn.relu(1 - pi**2) + 1e-6)
+    log_pi = log_pi - jnp.sum(squashed_pi, axis=-1, keepdims=True)
+    return mu, pi, log_pi
+
+def q_percentile(q_vals):
+    b, t, d = q_vals.shape
+    q_flat = q_vals.reshape(-1)
+    p5 = jnp.percentile(q_flat, 5.0)
+    p95 = jnp.percentile(q_flat, 95.0)
+    return jnp.maximum(p95 - p5, 1.0)
+
+def symlog(x):
+    return jnp.sign(x) * jnp.log(1 + jnp.abs(x))
+
+def symexp(x):
+    return jnp.sign(x) * (jnp.exp(jnp.abs(x)) - 1)
+
+def two_hot(x, vmin=-20, vmax=20, num_bins=101):
+    x = jnp.clip(symlog(x), vmin, vmax)
+    bin_size = (vmax - vmin) / (num_bins - 1)
+    bin_index = (x - vmin) / bin_size
+    lower = jnp.floor(bin_index).astype(jnp.int32)
+    upper = jnp.ceil(bin_index).astype(jnp.int32)
+    
+    p_upper = bin_index - lower
+    p_lower = 1.0 - p_upper
+    
+    lower_hot = jax.nn.one_hot(lower, num_bins) * p_lower[..., None]
+    upper_hot = jax.nn.one_hot(upper, num_bins) * p_upper[..., None]
+    return lower_hot + upper_hot
+
+def soft_ce(pred, target):
+    return -jnp.sum(target * jax.nn.log_softmax(pred, axis=-1), axis=-1)
+
+def two_hot_inv(logits, vmin=-20, vmax=20, num_bins=101):
+    probs = jax.nn.softmax(logits, axis=-1)
+    bins = jnp.linspace(vmin, vmax, num_bins)
+    return symexp(jnp.sum(probs * bins, axis=-1))
+
 
 
 # ─── Models ───────────────────────────────────────────────────────────────────
@@ -54,22 +106,42 @@ class Dynamics(nn.Module):
 
 class RewardHead(nn.Module):
     hidden: tuple = (128, 128)
+    num_bins: int = 101
     @nn.compact
     def __call__(self, z, a):
-        return NormMLP(self.hidden, 1)(jnp.concatenate([z, a], -1)).squeeze(-1)
+        return NormMLP(self.hidden, self.num_bins)(jnp.concatenate([z, a], -1))
 
 class QEnsemble(nn.Module):
     hidden: tuple = (128, 128)
+    num_bins: int = 101
     @nn.compact
     def __call__(self, z, a):
         x = jnp.concatenate([z, a], -1)
-        return jnp.stack([NormMLP(self.hidden, 1)(x).squeeze(-1),
-                          NormMLP(self.hidden, 1)(x).squeeze(-1)], -1)
+        return jnp.stack([NormMLP(self.hidden, self.num_bins)(x),
+                          NormMLP(self.hidden, self.num_bins)(x)], -2)
 
 class Pi(nn.Module):
     action_dim: int; hidden: tuple = (128, 128)
+    log_std_min: float = -10.0
+    log_std_dif: float = 12.0
     @nn.compact
-    def __call__(self, z): return jnp.tanh(NormMLP(self.hidden, self.action_dim)(z))
+    def __call__(self, z):
+        x = NormMLP(self.hidden, self.action_dim * 2)(z)
+        mean, log_std = jnp.split(x, 2, axis=-1)
+        log_std = log_std_fn(log_std, self.log_std_min, self.log_std_dif)
+        return mean, log_std
+        
+def sample_pi(params, z, key):
+    mean, log_std = params
+    eps = jax.random.normal(key, mean.shape)
+    log_prob = gaussian_logprob(eps, log_std)
+    size = eps.shape[-1]
+    scaled_log_prob = log_prob * size
+    action_pre = mean + eps * jnp.exp(log_std)
+    mu, action, log_prob = squash(mean, action_pre, log_prob)
+    entropy_scale = scaled_log_prob / (log_prob + 1e-8)
+    scaled_entropy = -log_prob * entropy_scale
+    return action, log_prob, scaled_entropy
 
 
 # ─── Vectorised multi-env buffer ──────────────────────────────────────────────
@@ -115,7 +187,7 @@ class MultiEnvBuffer:
 
 def make_update_fn(enc, dyn, rew_net, q_net, pi_net, tx,
                    gamma=0.99, rho=0.5, tau=0.01, rew_scale=10.0):
-    def loss_fn(params, tp, obs_b, act_b, rew_b, done_b):
+    def loss_fn(params, tp, obs_b, act_b, rew_b, done_b, rng, scale_val):
         B, T, _ = obs_b.shape
         z_all = enc.apply(params["enc"], obs_b.reshape(B * T, -1)).reshape(B, T, -1)
         z0    = z_all[:, 0]
@@ -135,32 +207,53 @@ def make_update_fn(enc, dyn, rew_net, q_net, pi_net, tx,
         zs_t1_T = jnp.transpose(zs[:, 1:],      (1, 0, 2))
 
         def step_loss(carry, inp):
-            w, z_t, a_t, r_t, d_t, z_tgt_t1, zs_t1 = inp
+            k, w, z_t, a_t, r_t, d_t, z_tgt_t1, zs_t1 = inp
             cl  = w * jnp.mean(jnp.sum((zs_t1 - z_tgt_t1) ** 2, -1))
             pr  = rew_net.apply(params["rew"], z_t, a_t)
-            rl  = w * jnp.mean((pr - rew_scale * r_t) ** 2)  # scaled target
+            rl  = w * jnp.mean(soft_ce(pr, two_hot(r_t)))
+            
             z_n = jax.lax.stop_gradient(z_tgt_t1)
-            pi_a = pi_net.apply(tp["pi"], z_n)
-            v_n  = jnp.maximum(jnp.min(q_net.apply(tp["q"], z_n, pi_a), -1), 0.0)
-            td   = rew_scale * r_t + gamma * (1 - d_t) * jax.lax.stop_gradient(v_n)
+            k, sk1, sk2 = jax.random.split(k, 3)
+            
+            # Target Policy — use mean action (not sampled) for low-variance TD targets
+            tp_mean_std = pi_net.apply(tp["pi"], z_n)
+            pi_a_mean, _ = tp_mean_std          # deterministic mean for target
+            pi_a_mean = jnp.tanh(pi_a_mean)    # squash to [-1,1]
+            
+            q_next_logits = q_net.apply(tp["q"], z_n, pi_a_mean)
+            q_next_vals = two_hot_inv(q_next_logits)
+            v_n  = jnp.maximum(jnp.min(q_next_vals, -1), 0.0)
+            td   = r_t + gamma * (1 - d_t) * jax.lax.stop_gradient(v_n)
             qp   = q_net.apply(params["q"], z_t, a_t)
-            vl   = w * jnp.mean(jnp.sum((qp - td[:, None]) ** 2, -1))
-            pi2  = pi_net.apply(params["pi"], jax.lax.stop_gradient(z_t))
-            pl   = -w * jnp.mean(jnp.min(
-                q_net.apply(jax.lax.stop_gradient(params["q"]),
-                            jax.lax.stop_gradient(z_t), pi2), -1))
-            return carry, (cl, rl, vl, pl)
+            vl   = w * jnp.mean(jnp.sum(soft_ce(qp, two_hot(td)[:, None, :]), -1))
+            
+            # Policy update
+            pi_mean_std = pi_net.apply(params["pi"], jax.lax.stop_gradient(z_t))
+            pi2, _, ent = sample_pi(pi_mean_std, jax.lax.stop_gradient(z_t), sk2)
+            q_pi2_logits = q_net.apply(jax.lax.stop_gradient(params["q"]), jax.lax.stop_gradient(z_t), pi2)
+            q_pi2_vals = two_hot_inv(q_pi2_logits)
+            
+            # Running scale downscaling and entropy coef
+            # entropy_coef=0.02 keeps entropy signal ≈ same magnitude as value loss early on
+            q_pi2_vals = q_pi2_vals / scale_val
+            entropy_coef = 0.02
+            pl   = -w * jnp.mean(jnp.min(q_pi2_vals, -1) + entropy_coef * ent.squeeze(-1))
+            
+            return k, (cl, rl, vl, pl, q_pi2_vals)
 
-        _, (cls, rls, vls, pls) = jax.lax.scan(
-            step_loss, None, (weights, z_t_T, a_T, r_T, d_T, z_t1_T, zs_t1_T))
+        keys = jax.random.split(rng, T - 1)
+        _, (cls, rls, vls, pls, q_pi2_vals_T) = jax.lax.scan(
+            step_loss, rng, (keys, weights, z_t_T, a_T, r_T, d_T, z_t1_T, zs_t1_T))
+            
         n = T - 1
         return (2 * jnp.sum(cls) + 2 * jnp.sum(rls) + jnp.sum(vls) + 0.1 * jnp.sum(pls)) / n, \
                {"c": jnp.sum(cls)/n, "r": jnp.sum(rls)/n,
                 "v": jnp.sum(vls)/n, "p": jnp.sum(pls)/n}
 
     @jax.jit
-    def step(params, tp, opt, ob, ab, rb, db):
-        (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(params, tp, ob, ab, rb, db)
+    def step(params, tp, opt, ob, ab, rb, db, rng, scale_val):
+        val_and_grad = jax.value_and_grad(loss_fn, has_aux=True)
+        (loss, aux), grads = val_and_grad(params, tp, ob, ab, rb, db, rng, scale_val)
         upd, nopt = tx.update(grads, opt, params)
         new_params = optax.apply_updates(params, upd)
         new_tp = jax.tree_util.tree_map(lambda t, p: (1 - tau)*t + tau*p, tp, new_params)
@@ -184,7 +277,8 @@ def make_mppi_fn(enc, dyn, rew_net, q_net, pi_net,
 
         # Compute pi-guided trajectory from current state.
         def pi_step(z, _):
-            a  = pi_net.apply(params["pi"], z[None])[0]
+            mean_a, _  = pi_net.apply(params["pi"], z[None])
+            a = mean_a[0]
             z2 = dyn.apply(params["dyn"], z[None], a[None])[0]
             return z2, a
         _, pi_traj = jax.lax.scan(pi_step, z0_single, None, length=horizon)  # (H, act_dim)
@@ -201,12 +295,14 @@ def make_mppi_fn(enc, dyn, rew_net, q_net, pi_net,
             def rollout_one(args):
                 z_i, a_seq = args
                 def env_step(z, a):
-                    r  = rew_net.apply(params["rew"], z[None], a[None]).squeeze() / rew_scale
+                    r_logits = rew_net.apply(params["rew"], z[None], a[None])
+                    r = two_hot_inv(r_logits).squeeze()
                     z2 = dyn.apply(params["dyn"], z[None], a[None]).squeeze(0)
                     return z2, r
                 zf, rs = jax.lax.scan(env_step, z_i, a_seq)
-                pi_a = pi_net.apply(params["pi"], zf[None])
-                vt   = jnp.maximum(jnp.min(q_net.apply(params["q"], zf[None], pi_a)), 0.0) / rew_scale
+                pi_a_mean, _ = pi_net.apply(params["pi"], zf[None])
+                q_logits = q_net.apply(params["q"], zf[None], pi_a_mean)
+                vt = jnp.maximum(jnp.min(two_hot_inv(q_logits)), 0.0).squeeze()
                 return jnp.sum(_gammas * rs) + _gamma_H * vt
 
             rets  = jax.vmap(rollout_one)((z0, acts))
@@ -283,10 +379,11 @@ def main():
               "rew": rn.init(k3, dz, da), "q": qn.init(k4, dz, da), "pi": pn.init(k5, dz)}
     tp = jax.tree_util.tree_map(lambda x: x, params)
 
-    _labels = {'enc': 'world', 'dyn': 'world', 'rew': 'world', 'q': 'q', 'pi': 'world'}
+    _labels = {'enc': 'world', 'dyn': 'world', 'rew': 'world', 'q': 'q', 'pi': 'pi'}
     tx = optax.multi_transform(
         {'world': optax.chain(optax.clip_by_global_norm(10.0), optax.adam(LR)),
-         'q':     optax.chain(optax.clip_by_global_norm(1.0),  optax.adam(LR))},
+         'q':     optax.chain(optax.clip_by_global_norm(1.0),  optax.adam(LR)),
+         'pi':    optax.chain(optax.clip_by_global_norm(1.0),  optax.adam(LR))},
         _labels)
     opt = tx.init(params)
 
@@ -296,12 +393,14 @@ def main():
     @jax.jit
     def act_fn_single(params, obs):
         z = enc.apply(params["enc"], obs[None])
-        return pn.apply(params["pi"], z)[0]
+        mean, _ = pn.apply(params["pi"], z)
+        return mean[0]
 
     @jax.jit
     def act_fn_batch(params, obs_batch):
         z = enc.apply(params["enc"], obs_batch)
-        return pn.apply(params["pi"], z)
+        mean, _ = pn.apply(params["pi"], z)
+        return mean
 
     # ── Buffer ──────────────────────────────────────────────────────────────
     cap_per_env = max(12_000, TOTAL_ENV // N_ENVS + 2000)
@@ -310,7 +409,7 @@ def main():
 
     out_dir = "/workspace/helios-rl/exp/tdmpc_dmc"
     os.makedirs(out_dir, exist_ok=True)
-    csv = f"{out_dir}/hopper-hop-utd-fix.csv"
+    csv = f"{out_dir}/hopper-hop-twohot.csv"
     with open(csv, "w") as f:
         f.write("step,reward,seed\n")
 
@@ -334,7 +433,8 @@ def main():
     t_c = time.time()
     samp = buf.sample(BS, rng)
     ob, ab, rb, db = [jnp.asarray(x) for x in samp]
-    params, tp, opt, loss, aux = upd(params, tp, opt, ob, ab, rb, db)
+    key, uk = jax.random.split(key)
+    params, tp, opt, loss, aux = upd(params, tp, opt, ob, ab, rb, db, uk, scale_val=50.0)
     jax.block_until_ready(params["enc"])
     print(f"Update compiled in {time.time()-t_c:.1f}s  loss={float(loss):.4f}", flush=True)
 
@@ -404,7 +504,7 @@ def main():
     # ── Training loop ────────────────────────────────────────────────────────
     print("Training...", flush=True)
     t0 = time.time()
-    log_every = max(N_ENVS * 200, 50_000)
+    log_every = N_ENVS * 4
 
     while env_steps < TOTAL_ENV:
         # ---- collect N_ENVS steps ----
@@ -427,8 +527,9 @@ def main():
         for _ in range(K_UPDATE):
             samp = buf.sample(BS, rng)
             if samp is not None:
+                key, uk = jax.random.split(key)
                 ob, ab, rb, db = [jnp.asarray(x) for x in samp]
-                params, tp, opt, loss, aux = upd(params, tp, opt, ob, ab, rb, db)
+                params, tp, opt, loss, aux = upd(params, tp, opt, ob, ab, rb, db, uk, scale_val=50.0)
 
         # ---- logging ----
         if env_steps % log_every < N_ENVS:

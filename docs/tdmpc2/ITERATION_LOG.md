@@ -322,6 +322,36 @@ step      MPPI    pi      c       r       v
 
 ---
 
+### v5 - Two-Hot Categorical and UTD Fixes (Ongoing)
+
+**Script**: `/workspace/helios-rl/scripts/train_tdmpc_hopper_v5_twohot.py`
+
+Implemented changes addressing gaps 1 and 2 from `IMPL_GAP.md`:
+1. Updated UTD ratio to 1:1, by changing `N_ENVS=256` and `K_UPDATE=256`. Total steps adjusted to `4_000_000`.
+2. Changed Reward and Q value predictions from exact values to two-hot categorical vectors using distributional regression (`symlog`, `two_hot`, `soft_ce`). Replaced MSE with Cross-Entropy. Removed `rew_scale` hack.
+3. Updated MPPI rollout algorithm to decode categorical vectors back into raw scalars via `two_hot_inv`.
+
+**Log**: `/tmp/hopper_v5_twohot.log`
+**Status**: Currently running to gather initial metrics and ensure gradients + value tracking stays stable natively.
+
+---
+
+### v6 - Stochastic Policy + Entropy and RunningScale
+
+**Script**: `/workspace/helios-rl/scripts/train_tdmpc_hopper_v6_stoch_pi.py`
+
+Implemented changes addressing gaps 2 and 4 from `IMPL_GAP.md`:
+1. Updated `Pi` class to output a stochastic Gaussian distribution, parameterizing a `mean` and `log_std`.
+2. Migrated the `tdmpc2` `math.squash` using `log`, `tanh`, `relu` properly in JAX/Flax computation logic. 
+3. Implemented `RunningScale` to track moving percentiles (`5th` to `95th`).
+4. Re-adjusted the RL policy generation loss formula targeting `Q_avg` minimization: `pi_loss = -(entropy_coef * scaled_entropy + RunningScale(Q_avg))`.
+5. Re-architected `pi_optim` into its distinct optax state instead of grouping it with model core params.
+
+**Log**: `/tmp/hopper_v6_stoch.log`
+**Status**: Successfully compiled. Training loop natively initiated! 
+
+---
+
 ## What Worked vs What Did Not
 
 ### ✅ What Worked

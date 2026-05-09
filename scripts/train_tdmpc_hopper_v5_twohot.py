@@ -21,13 +21,42 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.6")
 
 
-# ─── SimNorm ──────────────────────────────────────────────────────────────────
+# ─── SimNorm and Distributional Math ────────────────────────────────────────
 
 def simnorm(x, V=8):
     s = x.shape
     x = x.reshape(*s[:-1], V, s[-1] // V)
     x = jax.nn.softmax(x, axis=-1)
     return x.reshape(*s)
+
+def symlog(x):
+    return jnp.sign(x) * jnp.log(1 + jnp.abs(x))
+
+def symexp(x):
+    return jnp.sign(x) * (jnp.exp(jnp.abs(x)) - 1)
+
+def two_hot(x, vmin=-20, vmax=20, num_bins=101):
+    x = jnp.clip(symlog(x), vmin, vmax)
+    bin_size = (vmax - vmin) / (num_bins - 1)
+    bin_index = (x - vmin) / bin_size
+    lower = jnp.floor(bin_index).astype(jnp.int32)
+    upper = jnp.ceil(bin_index).astype(jnp.int32)
+    
+    p_upper = bin_index - lower
+    p_lower = 1.0 - p_upper
+    
+    lower_hot = jax.nn.one_hot(lower, num_bins) * p_lower[..., None]
+    upper_hot = jax.nn.one_hot(upper, num_bins) * p_upper[..., None]
+    return lower_hot + upper_hot
+
+def soft_ce(pred, target):
+    return -jnp.sum(target * jax.nn.log_softmax(pred, axis=-1), axis=-1)
+
+def two_hot_inv(logits, vmin=-20, vmax=20, num_bins=101):
+    probs = jax.nn.softmax(logits, axis=-1)
+    bins = jnp.linspace(vmin, vmax, num_bins)
+    return symexp(jnp.sum(probs * bins, axis=-1))
+
 
 
 # ─── Models ───────────────────────────────────────────────────────────────────
@@ -54,17 +83,19 @@ class Dynamics(nn.Module):
 
 class RewardHead(nn.Module):
     hidden: tuple = (128, 128)
+    num_bins: int = 101
     @nn.compact
     def __call__(self, z, a):
-        return NormMLP(self.hidden, 1)(jnp.concatenate([z, a], -1)).squeeze(-1)
+        return NormMLP(self.hidden, self.num_bins)(jnp.concatenate([z, a], -1))
 
 class QEnsemble(nn.Module):
     hidden: tuple = (128, 128)
+    num_bins: int = 101
     @nn.compact
     def __call__(self, z, a):
         x = jnp.concatenate([z, a], -1)
-        return jnp.stack([NormMLP(self.hidden, 1)(x).squeeze(-1),
-                          NormMLP(self.hidden, 1)(x).squeeze(-1)], -1)
+        return jnp.stack([NormMLP(self.hidden, self.num_bins)(x),
+                          NormMLP(self.hidden, self.num_bins)(x)], -2)
 
 class Pi(nn.Module):
     action_dim: int; hidden: tuple = (128, 128)
@@ -138,17 +169,19 @@ def make_update_fn(enc, dyn, rew_net, q_net, pi_net, tx,
             w, z_t, a_t, r_t, d_t, z_tgt_t1, zs_t1 = inp
             cl  = w * jnp.mean(jnp.sum((zs_t1 - z_tgt_t1) ** 2, -1))
             pr  = rew_net.apply(params["rew"], z_t, a_t)
-            rl  = w * jnp.mean((pr - rew_scale * r_t) ** 2)  # scaled target
+            rl  = w * jnp.mean(soft_ce(pr, two_hot(r_t)))
             z_n = jax.lax.stop_gradient(z_tgt_t1)
             pi_a = pi_net.apply(tp["pi"], z_n)
-            v_n  = jnp.maximum(jnp.min(q_net.apply(tp["q"], z_n, pi_a), -1), 0.0)
-            td   = rew_scale * r_t + gamma * (1 - d_t) * jax.lax.stop_gradient(v_n)
+            q_next_logits = q_net.apply(tp["q"], z_n, pi_a)
+            q_next_vals = two_hot_inv(q_next_logits)
+            v_n  = jnp.maximum(jnp.min(q_next_vals, -1), 0.0)
+            td   = r_t + gamma * (1 - d_t) * jax.lax.stop_gradient(v_n)
             qp   = q_net.apply(params["q"], z_t, a_t)
-            vl   = w * jnp.mean(jnp.sum((qp - td[:, None]) ** 2, -1))
+            vl   = w * jnp.mean(jnp.sum(soft_ce(qp, two_hot(td)[:, None, :]), -1))
             pi2  = pi_net.apply(params["pi"], jax.lax.stop_gradient(z_t))
-            pl   = -w * jnp.mean(jnp.min(
-                q_net.apply(jax.lax.stop_gradient(params["q"]),
-                            jax.lax.stop_gradient(z_t), pi2), -1))
+            q_pi2_logits = q_net.apply(jax.lax.stop_gradient(params["q"]), jax.lax.stop_gradient(z_t), pi2)
+            q_pi2_vals = two_hot_inv(q_pi2_logits)
+            pl   = -w * jnp.mean(jnp.min(q_pi2_vals, -1))
             return carry, (cl, rl, vl, pl)
 
         _, (cls, rls, vls, pls) = jax.lax.scan(
@@ -201,12 +234,14 @@ def make_mppi_fn(enc, dyn, rew_net, q_net, pi_net,
             def rollout_one(args):
                 z_i, a_seq = args
                 def env_step(z, a):
-                    r  = rew_net.apply(params["rew"], z[None], a[None]).squeeze() / rew_scale
+                    r_logits = rew_net.apply(params["rew"], z[None], a[None])
+                    r = two_hot_inv(r_logits).squeeze()
                     z2 = dyn.apply(params["dyn"], z[None], a[None]).squeeze(0)
                     return z2, r
                 zf, rs = jax.lax.scan(env_step, z_i, a_seq)
                 pi_a = pi_net.apply(params["pi"], zf[None])
-                vt   = jnp.maximum(jnp.min(q_net.apply(params["q"], zf[None], pi_a)), 0.0) / rew_scale
+                q_logits = q_net.apply(params["q"], zf[None], pi_a)
+                vt = jnp.maximum(jnp.min(two_hot_inv(q_logits)), 0.0).squeeze()
                 return jnp.sum(_gammas * rs) + _gamma_H * vt
 
             rets  = jax.vmap(rollout_one)((z0, acts))
@@ -310,7 +345,7 @@ def main():
 
     out_dir = "/workspace/helios-rl/exp/tdmpc_dmc"
     os.makedirs(out_dir, exist_ok=True)
-    csv = f"{out_dir}/hopper-hop-utd-fix.csv"
+    csv = f"{out_dir}/hopper-hop-twohot.csv"
     with open(csv, "w") as f:
         f.write("step,reward,seed\n")
 
