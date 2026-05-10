@@ -1,17 +1,15 @@
 """
-Sweep K_UPDATE values to measure speed vs. sample-efficiency tradeoff.
+Sweep horizon H to measure speed vs sample-efficiency tradeoff.
 
-Each run:
-  - HopperHop, N_ENVS=256, BS=256, SEQ=6, HIDDEN=(128,128)
-  - Warmup 25k env-steps (random), then 500k env-steps training
-  - Evaluates pi policy at 250k and 500k env-steps (5 episodes each)
-  - Reports: SPS, wall time, pi reward at each eval point
+H controls scan length in update_fn (H-1 steps of dynamics unrolling).
+Each update does: encode → scan(dyn, H-1) → reward/Q/pi loss per step.
+Reducing H from 5→3 cuts ~40% of per-update compute.
 
-K_UPDATE values swept: 16, 32, 64, 128, 256
-  (UTD = K_UPDATE/N_ENVS = 1/16 ... 1:1)
+Fixed: K_UPDATE=64 (proven best from K sweep), N_ENVS=256, 500k train steps.
+Sweep: H in [1, 2, 3, 5] (H=4 skipped, 3 and 5 are key comparison points)
 
 Usage:
-  MUJOCO_GL=egl python3 helios-rl/scripts/sweep_k_update.py 2>&1 | tee /tmp/k_update_sweep.log
+  MUJOCO_GL=egl python3 helios-rl/scripts/sweep_horizon.py 2>&1 | tee /tmp/horizon_sweep.log
 """
 
 import os, sys, time, gc
@@ -120,28 +118,31 @@ class MultiEnvBuffer:
 
     def total_size(self): return int(self.size.sum())
 
-    def sample(self, B, rng):
-        valid = np.where(self.size >= self.T+1)[0]
+    def sample(self, B, rng, seq_len):
+        valid = np.where(self.size >= seq_len+1)[0]
         if len(valid) == 0: return None
         env_ids = rng.choice(valid, size=B, replace=True)
         sizes   = self.size[env_ids]
-        starts  = (rng.random(B)*(sizes-self.T)).astype(np.int64)
-        idx     = starts[:,None]+np.arange(self.T)[None,:]
+        starts  = (rng.random(B)*(sizes-seq_len)).astype(np.int64)
+        idx     = starts[:,None]+np.arange(seq_len)[None,:]
         return (self.obs[env_ids[:,None], idx],
                 self.acts[env_ids[:,None], idx],
                 self.rews[env_ids[:,None], idx],
                 self.done[env_ids[:,None], idx])
 
 
-# ─── Update fn ────────────────────────────────────────────────────────────────
+# ─── Update fn (H is baked into jit at construction time) ────────────────────
 
 def make_update_fn(enc, dyn, rew_net, q_net, pi_net, tx,
-                   gamma=0.99, rho=0.5, tau=0.01):
+                   gamma=0.99, rho=0.5, tau=0.01, H=5):
+    """Returns a jit-compiled update step that unrolls H-1 dynamics steps."""
+    T = H + 1  # SEQ = H+1: obs[0..H], acts[0..H-1], rews[0..H-1]
+
     def loss_fn(params, tp, obs_b, act_b, rew_b, done_b, rng, _scale):
-        B, T, _ = obs_b.shape
+        B = obs_b.shape[0]
         z_all = enc.apply(params["enc"], obs_b.reshape(B*T,-1)).reshape(B,T,-1)
         z0    = z_all[:,0]
-        acts_T = jnp.transpose(act_b[:,:-1],(1,0,2))
+        acts_T = jnp.transpose(act_b[:,:-1],(1,0,2))  # (H, B, act_dim)
         def dyn_step(z, a): return dyn.apply(params["dyn"], z, a), z
         z_final, zs_prefix = jax.lax.scan(dyn_step, z0, acts_T)
         zs = jnp.concatenate([jnp.transpose(zs_prefix,(1,0,2)), z_final[:,None,:]], 1)
@@ -153,6 +154,7 @@ def make_update_fn(enc, dyn, rew_net, q_net, pi_net, tx,
         d_T     = jnp.transpose(done_b[:,:-1], (1,0))
         z_t1_T  = jnp.transpose(z_tgt[:,1:],   (1,0,2))
         zs_t1_T = jnp.transpose(zs[:,1:],      (1,0,2))
+
         def step_loss(carry, inp):
             k, w, z_t, a_t, r_t, d_t, z_tgt_t1, zs_t1 = inp
             cl  = w*jnp.mean(jnp.sum((zs_t1-z_tgt_t1)**2,-1))
@@ -171,6 +173,7 @@ def make_update_fn(enc, dyn, rew_net, q_net, pi_net, tx,
             q_pi = q_net.apply(jax.lax.stop_gradient(params["q"]), jax.lax.stop_gradient(z_t), pi2)
             pl   = -w*jnp.mean(jnp.min(two_hot_inv(q_pi),-1))
             return k, (cl, rl, vl, pl)
+
         keys = jax.random.split(rng, T-1)
         _, (cls, rls, vls, pls) = jax.lax.scan(
             step_loss, rng, (keys, weights, z_t_T, a_T, r_T, d_T, z_t1_T, zs_t1_T))
@@ -190,12 +193,12 @@ def make_update_fn(enc, dyn, rew_net, q_net, pi_net, tx,
 
 # ─── One training run ────────────────────────────────────────────────────────
 
-def run_one(env, K_UPDATE, seed=42, total_env=500_000, warmup_env=25_000,
+def run_one(env, H, seed=42, total_env=500_000, warmup_env=25_000,
             eval_at=(250_000, 500_000), eval_eps=5):
-    """Return dict with SPS, wall_time, and pi rewards at each eval point."""
     N_ENVS  = 256
+    K_UPDATE= 64   # fixed — proven optimal
     BS      = 256
-    SEQ     = 6
+    SEQ     = H + 1  # sequence length must match horizon
     LR      = 3e-4
     LATENT  = 128
     HIDDEN  = (128, 128)
@@ -221,7 +224,6 @@ def run_one(env, K_UPDATE, seed=42, total_env=500_000, warmup_env=25_000,
     @jax.jit
     def eval_step_fn(state, act): return env.step(state, act[None])
 
-    # models
     enc=Encoder(LATENT,HIDDEN); dyn=Dynamics(LATENT,HIDDEN)
     rn=RewardHead(HIDDEN); qn=QEnsemble(HIDDEN); pn=Pi(act_dim,HIDDEN)
 
@@ -239,12 +241,13 @@ def run_one(env, K_UPDATE, seed=42, total_env=500_000, warmup_env=25_000,
         _labels)
     opt = tx.init(params)
 
-    upd = make_update_fn(enc,dyn,rn,qn,pn,tx,GAMMA,tau=TAU)
+    upd = make_update_fn(enc,dyn,rn,qn,pn,tx,GAMMA,tau=TAU,H=H)
 
     @jax.jit
-    def act_fn_batch(p, obs): 
+    def act_fn_batch(p, obs):
         z = enc.apply(p["enc"], obs)
-        return jnp.tanh(pn.apply(p["pi"], z)[0])
+        mean, _ = pn.apply(p["pi"], z)
+        return jnp.tanh(mean)
 
     @jax.jit
     def act_fn_single(p, obs):
@@ -252,7 +255,7 @@ def run_one(env, K_UPDATE, seed=42, total_env=500_000, warmup_env=25_000,
         mean, _ = pn.apply(p["pi"], z)
         return jnp.tanh(mean[0])
 
-    # buffer
+    # buffer — max_seq_len is always H+1 for sampling, but buffer capacity uses largest H
     cap = max(12_000, total_env // N_ENVS + 2000)
     buf = MultiEnvBuffer(cap, N_ENVS, obs_dim, act_dim, SEQ)
 
@@ -269,7 +272,7 @@ def run_one(env, K_UPDATE, seed=42, total_env=500_000, warmup_env=25_000,
         env_steps += N_ENVS
 
     # compile
-    samp = buf.sample(BS, rng)
+    samp = buf.sample(BS, rng, SEQ)
     ob, ab, rb, db = [jnp.asarray(x) for x in samp]
     key, uk = jax.random.split(key)
     params, tp, opt, loss, aux = upd(params, tp, opt, ob, ab, rb, db, uk, scale_val=50.0)
@@ -292,11 +295,10 @@ def run_one(env, K_UPDATE, seed=42, total_env=500_000, warmup_env=25_000,
             rets.append(er)
         return float(np.mean(rets))
 
-    results = {"K_UPDATE": K_UPDATE, "eval": {}}
+    results = {"H": H, "SEQ": SEQ, "eval": {}}
     t0 = time.time()
     eval_set = set(eval_at)
 
-    # training loop
     while env_steps < total_env + warmup_env:
         if env_steps < EXPL_UNTIL + warmup_env:
             acts_np = np.random.uniform(al, ah, (N_ENVS, act_dim)).astype(np.float32)
@@ -309,12 +311,10 @@ def run_one(env, K_UPDATE, seed=42, total_env=500_000, warmup_env=25_000,
         buf.add_batch(obs_np, acts_np, np.array(env_state.reward), np.array(env_state.done>0.5, np.float32))
         obs_np = np.array(env_state.obs)
         env_steps += N_ENVS
-
-        # training steps counted from after warmup
         train_steps = env_steps - warmup_env
 
         for _ in range(K_UPDATE):
-            samp = buf.sample(BS, rng)
+            samp = buf.sample(BS, rng, SEQ)
             if samp is not None:
                 key, uk = jax.random.split(key)
                 ob, ab, rb, db = [jnp.asarray(x) for x in samp]
@@ -327,7 +327,7 @@ def run_one(env, K_UPDATE, seed=42, total_env=500_000, warmup_env=25_000,
                 pi_ret  = eval_pi()
                 sps     = train_steps / elapsed
                 results["eval"][chk] = {"pi": pi_ret, "sps": sps, "wall_s": elapsed}
-                print(f"    [K={K_UPDATE:>3d}] train_steps={train_steps:>7,}  "
+                print(f"    [H={H}] train_steps={train_steps:>7,}  "
                       f"pi={pi_ret:6.1f}  sps={sps:.0f}  elapsed={elapsed:.0f}s  "
                       f"loss={float(loss):.4f}", flush=True)
 
@@ -346,53 +346,49 @@ def main():
     env     = wrapper.wrap_for_brax_training(env_raw, episode_length=1000, action_repeat=1)
     print(f"obs_dim={env.observation_size}  act_dim={env.action_size}", flush=True)
 
-    K_VALUES    = [16, 32, 64, 128, 256]
-    TOTAL_ENV   = 500_000
-    WARMUP_ENV  = 25_000
-    EVAL_AT     = (250_000, 500_000)
+    H_VALUES  = [1, 2, 3, 5]   # H=5 is baseline from v10; H=3 is candidate
+    TOTAL_ENV = 500_000
+    WARMUP    = 25_000
+    EVAL_AT   = (250_000, 500_000)
 
     all_results = []
-    for K in K_VALUES:
+    for H in H_VALUES:
         print(f"\n{'='*60}", flush=True)
-        print(f"K_UPDATE={K}  UTD={K/256:.3f}  (N_ENVS=256)", flush=True)
+        print(f"H={H}  SEQ={H+1}  K_UPDATE=64  N_ENVS=256", flush=True)
         print(f"{'='*60}", flush=True)
-        res = run_one(env, K, total_env=TOTAL_ENV, warmup_env=WARMUP_ENV, eval_at=EVAL_AT)
+        res = run_one(env, H, total_env=TOTAL_ENV, warmup_env=WARMUP, eval_at=EVAL_AT)
         all_results.append(res)
-        # Force GC between runs to free JAX memory
         gc.collect()
         print(f"  → final SPS={res['final_sps']:.0f}  total_wall={res['total_wall_s']:.0f}s", flush=True)
 
-    # ── Summary table ─────────────────────────────────────────────────────
     print(f"\n{'='*70}")
-    print("SWEEP SUMMARY")
+    print("HORIZON SWEEP SUMMARY  (K_UPDATE=64 fixed)")
     print(f"{'='*70}")
-    header = f"{'K_UPDATE':>8}  {'UTD':>6}  {'SPS@500k':>9}  " + \
+    header = f"{'H':>4}  {'SEQ':>4}  {'SPS@500k':>9}  " + \
              "  ".join(f"{'pi@'+str(e//1000)+'k':>9}" for e in EVAL_AT)
     print(header)
-    print("-"*70)
+    print("-"*60)
     for res in all_results:
-        K   = res["K_UPDATE"]
-        utd = K/256
+        H   = res["H"]
         sps = res["final_sps"]
         pi_vals = "  ".join(
             f"{res['eval'].get(e, {}).get('pi', float('nan')):>9.1f}"
             for e in EVAL_AT)
-        print(f"{K:>8}  {utd:>6.3f}  {sps:>9.0f}  {pi_vals}")
+        print(f"{H:>4}  {H+1:>4}  {sps:>9.0f}  {pi_vals}")
     print(f"{'='*70}")
 
-    # Save CSV
-    out_csv = "/tmp/k_update_sweep.csv"
+    out_csv = "/tmp/horizon_sweep.csv"
     with open(out_csv, "w") as f:
-        f.write("k_update,utd,final_sps,wall_s," +
+        f.write("H,seq,final_sps,wall_s," +
                 ",".join(f"pi_{e//1000}k" for e in EVAL_AT) + "\n")
         for res in all_results:
-            K   = res["K_UPDATE"]
+            H   = res["H"]
             sps = res["final_sps"]
             ws  = res["total_wall_s"]
             pi_vals = ",".join(
                 f"{res['eval'].get(e, {}).get('pi', float('nan')):.1f}"
                 for e in EVAL_AT)
-            f.write(f"{K},{K/256:.3f},{sps:.0f},{ws:.0f},{pi_vals}\n")
+            f.write(f"{H},{H+1},{sps:.0f},{ws:.0f},{pi_vals}\n")
     print(f"\nCSV saved to {out_csv}")
 
 
