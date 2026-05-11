@@ -1,0 +1,13 @@
+task,seed,step,reward
+CartpoleBalance,1,491520,301.1911
+CartpoleBalance,1,737280,445.2416
+CartpoleBalance,1,983040,405.8907
+CartpoleBalance,1,1228800,351.3942
+CartpoleBalance,1,1474560,353.7361
+CartpoleBalance,1,1720320,500.1412
+CartpoleBalance,1,1966080,428.1080
+CartpoleBalance,1,2211840,474.9178
+CartpoleBalance,1,2457600,452.3377
+CartpoleBalance,1,2703360,414.3395
+CartpoleBalance,1,2949120,430.1494
+CartpoleBalance,1,3194880,369.1149

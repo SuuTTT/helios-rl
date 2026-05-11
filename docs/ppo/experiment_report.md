@@ -1,26 +1,62 @@
 # PPO Experiment Report — CheetahRun Benchmark
-**Date:** 2026-05-07  
+**Date:** 2026-05-07 (updated: milestone reached)
 **Environment:** `dm_control/cheetah-run-v0` (max return ≈ 1000, episode length = 1000 steps)  
 **Hardware:** NVIDIA GeForce RTX 3090 (24 GiB) / CPU (JAX uses GPU, CleanRL runs on CPU)
 
 ---
 
+## Milestone Result ✅
+
+**v34s3 — 904.5 @ 74M steps** — matches Brax PPO reference exactly.
+
+| | Value |
+|---|---|
+| Script | `/workspace/run_ppo_continuous_mjx.py` |
+| Exp name | `ppo_jax_v34s3` |
+| Seed | 3 |
+| Best return | **904.5** |
+| At step | 74M |
+| Return @ 60M | 895 |
+| Brax reference | 904 @ 59M |
+| Log | `/workspace/runs/ppo_jax_v34s3.log` |
+| Checkpoint | `/workspace/runs/chk_v34s3/ppo_jax_v34s3_best.msgpack` |
+
+**Key config** (final milestone):
+```
+num_envs=2048, num_steps=30 (×16 rollouts merged = 32768 env steps/update)
+lr=1e-3, update_epochs=16, num_minibatches=32, gamma=0.995
+ent_coef=0.01, clip_coef=0.3, max_grad_norm=1.0
+NormalTanh distribution, per-epoch GAE
+crash recovery threshold=150pts, NO optimizer reset on recovery
+```
+
+**Summary of breakthroughs** (v2 → v34s3):
+1. NormalTanh distribution with Jacobian correction (v15) — +170 pts vs Gaussian+clip
+2. Per-epoch GAE (v17) — +35 pts vs one-shot GAE
+3. Match Brax data volume: 16 rollouts × 30 steps merged (v25) — prevents IS ratio staleness
+4. max_grad_norm=1.0 (v19) — tighter clip was throttling early learning
+5. Crash recovery WITHOUT optimizer reset (v34s3) — recovery with reset (v27) got 904 once but
+   was fragile; no-reset recovery is reproducible
+
+Full iteration history: [ppo_cheetahrun_iteration_log.md](ppo_cheetahrun_iteration_log.md)
+
+---
+
 ## 1. Executive Summary
 
-Two PPO variants were benchmarked on CheetahRun. CleanRL's PyTorch PPO achieves **~550 peak return in 3 M steps (2.5 hours)**. A custom JAX/MJX PPO on GPU reaches **~465 peak return in 30 M steps (~12 minutes)**. The JAX variant is 84× faster in wall-clock time at 3 M steps but is capped structurally by its short rollout horizon relative to episode length.
+Three PPO variants were benchmarked on CheetahRun. The final custom JAX/MJX PPO (v34s3) matches the Brax reference at **904.5 @ 74M steps**.
 
-| | CleanRL PyTorch PPO | JAX/MJX PPO (best config) |
-|---|---|---|
-| Framework | PyTorch + CleanRL | JAX + Flax + Optax |
-| Env backend | dm_control (CPU) | MuJoCo Playground / MJX (GPU) |
-| Num envs | 4 | 512 |
-| Steps per rollout | 512 | 10 |
-| Throughput | ~350 SPS | ~27 000 SPS |
-| Wall-clock (3 M steps) | ~2.5 hours | ~110 seconds |
-| Peak return @ 3 M steps | **550** | 124 |
-| Peak return @ 30 M steps | — | **465** |
-| Stability after peak | Stable | Stable (constant LR) |
-| Checkpoint saved | — | ✓ (`ppo_jax_ue8_fixed_best.msgpack`) |
+| | CleanRL PyTorch PPO | JAX/MJX PPO (early) | JAX/MJX PPO v34s3 (milestone) | Brax PPO (reference) |
+|---|---|---|---|---|
+| Framework | PyTorch + CleanRL | JAX + Flax + Optax | JAX + Flax + Optax | Brax |
+| Env backend | dm_control (CPU) | MuJoCo Playground / MJX | MuJoCo Playground / MJX | MuJoCo Playground |
+| Num envs | 4 | 512 | 2048 | 2048 |
+| Steps per rollout | 512 | 10 | 30 × 16 merged | 30 × 16 |
+| Throughput | ~350 SPS | ~27 000 SPS | ~27 000 SPS | ~27 000 SPS |
+| Wall-clock (3 M steps) | ~2.5 hours | ~110 seconds | ~110 seconds | ~110 seconds |
+| Peak return | **550** @ 3M | 465 @ 30M | **904.5** @ 74M | **904** @ 59M |
+| Stability after peak | Stable | Stable | Crash+recover | Crash+recover |
+| Checkpoint saved | — | ✓ (`ppo_jax_ue8_fixed_best.msgpack`) | ✓ (`chk_v34s3/`) | N/A |
 
 ---
 

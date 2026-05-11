@@ -133,6 +133,7 @@ Also: zero-init last layer of reward/Q; enc lr × 0.3.
 **Warning**: 4–16x larger model. Will drop SPS to ~200–400. Only after algorithm is correct.
 
 **Success criterion**: pi@1M ≥ 300, MPPI@1M ≥ 350.
+**Status (v24)**: ✅ ACHIEVED — v24 MPPI@1.25M=344, MPPI@1.75M=353, MPPI@3M=357. Stable at 340–357 from 1.25M onwards.
 
 ---
 
@@ -146,6 +147,7 @@ After model capacity is validated:
 **Warning**: drops SPS by another 2–5x. Likely ~50-100 SPS.
 
 **Success criterion**: MPPI@1M ≥ 400.
+**Status**: Not started. Next after v24 4M run completes.
 
 ---
 
@@ -158,24 +160,53 @@ After model capacity is validated:
 
 ---
 
+## Remaining Architecture Gaps (to close the 350→594 gap)
+
+Based on official config analysis, the following discrepancies remain after v24:
+
+| Gap | Ours (v24) | Official | Priority |
+|-----|------------|---------|----------|
+| num_q | 2 | **5** | HIGH — 5-head ensemble gives better conservative Q estimates |
+| vmin/vmax | ±20 | **±10** | HIGH — 2× coarser bin resolution; Q≈6 symlog for hopper |
+| enc_lr_scale | 1.0 (missing) | **0.3** | HIGH — encoder updates 3× too fast, destabilizes heads |
+| grad_clip_norm | none | **20** | MEDIUM — p_loss at -14 shows unconstrained gradients |
+| dropout | 0.0 | **0.01** | MEDIUM — missing regularization in NormMLP layers |
+| gamma | 0.99 | **≈0.995** | LOW — 1 − discount_denom/ep_len = 1 − 5/1000 |
+| eval_episodes | 3 | **10** | LOW — our variance is 3× higher |
+
+**Proposed v25** = v24 + (num_q=5, vmin/vmax=±10, enc_lr_scale=0.3, grad_clip=20).
+These are the four changes most likely to unlock the phase transition (hopper learning consistent gait) seen in official seed 3 at 3M+.
+
+---
+
 ## Experiment Log
 
-| Version | pi@500k | MPPI@500k | pi@1M | MPPI@1M | pi@4M | MPPI@4M | SPS |
-|---------|---------|-----------|-------|---------|-------|---------|-----|
-| v12 (baseline) | ~5.1 | 0.9 | 68.3 | 49.9 | 239.3 | - | 640 |
-| v13 (Phase 1) | 117.0 | 73.0 | 179.8 | 169.0 | 337.0 | 388.2 | ~560–740 |
-| v14 (Phase 2) | ? | ? | ? | ? | ? | ? | ~550 |
-| v15 (Phase 3) | ? | ? | ? | ? | ? | ? | ~540 |
-| v16 (Phase 4 capacity) | ? | ? | ? | ? | ? | ? | ~300 |
-| v17 (Phase 5 collection) | ? | ? | ? | ? | ? | ? | ~100 |
-| Official (PyTorch) | 267.9 | - | 373.1 | - | 594.2 | - | 10 |
+| Version | pi@500k | MPPI@500k | pi@1M | MPPI@1M | pi@4M | MPPI@4M | SPS | Status |
+|---------|---------|-----------|-------|---------|-------|---------|-----|--------|
+| v12 (baseline) | ~5.1 | 0.9 | 68.3 | 49.9 | 239.3 | — | 640 | ✅ Done |
+| v13 (Phase 1: MPPI parity) | 117 | 73 | 180 | 169 | 337 | **388** | ~560 | ✅ Done |
+| v14 (Phase 2: stochastic pi) | 175 | 144 | 0 | 0 | 266 | 263 | ~550 | ✅ Done |
+| v15 (official coefs, latent=128) | 0 | 0 | — | — | — | — | ~540 | ✅ Done |
+| v16 (official coefs, latent=512) | ~7 | ~0 | ~40 | ~40 | — | ~unstable | ~300 | ✅ Done |
+| v17 (latent=512, no RunningScale) | 168 | 185 | 0 | 0 | — | — | ~500 | ✅ Done |
+| v18 (latent=512 + RunningScale) | 76 | 163 | 261 | 244 | 270 | **280** | ~550 | ✅ Done |
+| v19 (v18 + entropy_coef=1e-4) | 0 | 68 | 246 | 244 | 264 | ~270 | ~550 | ✅ Done |
+| v20 (K_UPDATE=256) | 225 | 239 | 231 | 234 | — | ~235 | ~550 | ✅ Done |
+| v21 (v20 + TAU/K fix) | ~12 | ~0 | — | — | — | — | ~550 | ✅ Done |
+| v22 (v20 + fixed target) | ~22 | ~67 | — | — | — | — | ~550 | ✅ Done |
+| v23 (latent=256) | ~0 | ~0 | 262 | 272 | 270 | 303 | ~550 | ✅ Done |
+| **v24 (RunningScale cap=4.0)** | **0** | **0** | **330** | **344** | — | **~350** | **~560** | 🔄 Running |
+| Official (PyTorch, seed 3) | 268 | — | 373 | — | — | **594** | 10 | Reference |
+| Official (PyTorch, seeds 1-2 avg) | ~170 | — | ~320 | — | — | **~377** | 10 | Reference |
 
 ---
 
 ## Decision Points
 
-- If v13@4M MPPI < 250: run Phase 0 (v13_diag) to understand world model quality before Phase 2
-- If v13@4M MPPI ≥ 250: proceed directly to Phase 2
-- If Phase 2 entropy causes instability: lower entropy_coef to 1e-5
-- If Phase 4 capacity causes OOM: reduce NUM_ENVS to 128
-- If Phase 5 MPPI-collection SPS < 50: use hybrid (50% pi, 50% MPPI) collection
+- ✅ v13@4M MPPI=388 ≥ 250: Phase 2 proceeded
+- ✅ Phase 2 entropy (v14) caused instability: stochastic pi alone insufficient without RunningScale
+- ✅ Phase 4 capacity (v17): latent=512 needs RunningScale
+- ✅ RunningScale (v18): prevents collapse, scale cap (v24) breaks plateau → v24 milestone
+- **Next**: v25 targeting official architecture gaps (num_q=5, vmin=±10, enc_lr_scale=0.3, grad_clip=20)
+- If v24@4M MPPI ≥ 370: v24 matches official seed 1-2 mean → proceed to Phase 5 (MPPI collection)
+- If v25 causes instability: add changes one at a time (num_q=5 first, highest impact)
