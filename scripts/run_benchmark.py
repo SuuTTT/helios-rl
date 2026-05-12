@@ -715,25 +715,34 @@ def train_tdmpc2(
             rets.append(er)
         return float(np.mean(rets))
 
-    compare_csv = None
+    eval_type_csv = None
     ckpt_dir = None
     best_mppi = resume_best_mppi
-    if env_id == "HopperHop":
-        suffix = "tdmpc-glass" if use_glass else "tdmpc2-rerun"
-        compare_csv = EXP_DIR.parent / "tdmpc_dmc" / f"hopper-hop-{suffix}.csv"
-        compare_csv.parent.mkdir(parents=True, exist_ok=True)
-        if not (resume_checkpoint and compare_csv.exists()):
-            with open(compare_csv, "w") as cf:
+    if use_glass:
+        eval_type_csv = (
+            EXP_DIR.parent
+            / "tdmpc_glass"
+            / env_id
+            / f"seed_{seed}.csv"
+        )
+        eval_type_csv.parent.mkdir(parents=True, exist_ok=True)
+        if not (resume_checkpoint and eval_type_csv.exists()):
+            with open(eval_type_csv, "w") as cf:
                 cf.write("step,reward,eval_type,seed\n")
-        if use_glass:
-            ckpt_dir = (
-                EXP_DIR.parent
-                / "tdmpc_dmc"
-                / "checkpoints"
-                / "tdmpc-glass"
-                / env_id
-                / f"seed_{seed}"
-            )
+    elif env_id == "HopperHop":
+        eval_type_csv = EXP_DIR.parent / "tdmpc_dmc" / "hopper-hop-tdmpc2-rerun.csv"
+        eval_type_csv.parent.mkdir(parents=True, exist_ok=True)
+        with open(eval_type_csv, "w") as cf:
+            cf.write("step,reward,eval_type,seed\n")
+
+    if use_glass:
+        ckpt_dir = (
+            EXP_DIR.parent
+            / "tdmpc_glass"
+            / env_id
+            / f"seed_{seed}"
+            / "checkpoints"
+        )
 
     # ── Warmup JIT — compile multi_step with dummy data
     print("  Warming up JIT (may take 30-90s)...", flush=True)
@@ -846,8 +855,8 @@ def train_tdmpc2(
                                 S=np.asarray(gd["S"]),
                             )
                 write_csv(fh, env_id, seed, env_steps, ret)
-                if compare_csv is not None:
-                    with open(compare_csv, "a") as cf:
+                if eval_type_csv is not None:
+                    with open(eval_type_csv, "a") as cf:
                         cf.write(f"{env_steps},{ret:.1f},pi,{seed}\n")
                         cf.write(f"{env_steps},{mppi_ret:.1f},mppi,{seed}\n")
                 if ckpt_dir is not None:
