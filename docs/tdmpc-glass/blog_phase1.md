@@ -438,13 +438,8 @@ Mean across seeds: \(366.5\pm 78\) vs official \(449.2\pm 312\) — Phase 1 is
 variance**, and the underperforming seeds (4, 5) are exactly the ones whose
 Glass head collapsed to a 3-cluster basin.
 
-![Phase 1 (5 seeds) vs Phase 1b (3 seeds) vs Official TD-MPC2](/img/tdmpc-glass/ci_phase1_vs_phase1b.png)
-
-*Figure 1. MPPI return on HopperHop. Phase 1 (red, n=5, full 4 M) lands within
-the official 95% CI (grey). Phase 1b (blue family, three completed seeds,
-fourth in flight) is **bimodal**: seeds 1 and 2 (top blue curves) sit above
-the official mean for the whole run; seed 3 (bottom blue curve) plateaus
-near 290 despite finding the same K=4 basin (see §5.6).*
+(See Figure 1 in §5.6 for the full Phase 1 / Phase 1b / Official comparison
+across all 15 seeds.)
 
 ### 5.4 How to diagnose Glass — what \(S\), the four scalars, and the transition matrix actually tell you
 
@@ -531,42 +526,96 @@ Phase 1b adds two changes on top of Phase 1: `proto_temperature 1.0 → 0.7`
 Launched on a separate RTX 4070 Ti box (vast.ai, §7) at \(\approx 580\) sps,
 \(\approx 5\!\times\) the 3090's throughput.
 
-Three Phase-1b seeds have completed (4 M each), one is in flight, one is queued:
+**All five Phase 1b seeds have now finished** (4 M each):
 
-| seed | final return | peak return  | active K | max\_mass | cut  | note                          |
-|------|--------------|--------------|---------:|----------:|-----:|-------------------------------|
-| 1    | **438.3**    | 526 (@3 M)   | 4        | 0.250     | 0.71 | best peak                     |
-| 2    | **526.3**    | 526 (final)  | 4        | 0.250     | 0.70 | best final                    |
-| 3    | **294.4**    | 294          | 4        | 0.250     | 0.69 | **same basin, world-model fail** |
-| 4    | in flight (0.28 M, sps≈514) | — | — | —         | —    | early                         |
-| 5    | queued       | —            | —        | —         | —    | —                             |
+| seed | final return | peak return | active K | max\_mass | cut  | note                          |
+|------|--------------|-------------|---------:|----------:|-----:|-------------------------------|
+| 1    | 438.3        | 526 (@3 M)  | 4        | 0.250     | 0.71 | best peak                     |
+| 2    | 526.3        | 526 (final) | 4        | 0.250     | 0.70 | smooth climber                |
+| 3    | **294.4**    | 294         | 4        | 0.250     | 0.69 | **plateau** (see below)       |
+| 4    | **186.5**    | 227         | 4        | 0.250     | 0.71 | **oscillating** (see below)   |
+| 5    | **562.1**    | 562 (final) | 4        | 0.250     | 0.70 | best final                    |
 
-Mean across the three completed Phase-1b seeds is \(\approx 419.7\) vs Phase
-1's \(366.5\) — and the *best* Phase-1b seed (526) sits above the official
-mean (449). But the seed-3 row is the interesting one.
+Phase 1b mean across all five seeds: **\(401.5\pm 158\)** vs Phase 1's
+\(366.5\pm 78\) and official \(449.2\pm 312\). Three of five seeds (1, 2, 5)
+sit *at or above* the official mean; two (3, 4) plateau well below it.
 
-**A new failure mode.** Seed 3's Glass diagnostics are *identical to seeds 1
-and 2* for the entire run — it found the 4-cluster basin in the first 250 k
-env steps and stayed there. But MPPI return plateaus at \(\approx\!290\). So:
+![Phase 1b: all 5 seeds locked onto K=4, returns bimodal](/img/tdmpc-glass/phase1b_basin.png)
 
-> **Finding the right cluster basin is necessary but not sufficient.**
-> Phase 1b decouples world-model performance from Glass-basin choice; some
-> world-model failures remain.
+*Figure 6. Every one of the five Phase-1b seeds settles into the K=4 cluster
+basin (annotated on top of each bar) — but only 3/5 of them turn that basin
+into a near-optimal hopping policy. The other two get stuck in
+qualitatively different sub-optimal corners (§5.6.1).*
 
-This is the data that justifies Phase 2 (next section): if the bottleneck is
-the world model, the SE gradient has to be allowed back into it.
+![Phase 1 (5 seeds) vs Phase 1b (5 seeds) vs Official TD-MPC2](/img/tdmpc-glass/ci_phase1_vs_phase1b.png)
 
-**Possible "instant fixes" for the new failure mode** (not yet tested):
+*Figure 1. MPPI return on HopperHop. Phase 1 (red, n=5) lands within the
+official 95% CI (grey). Phase 1b (blue, n=5) has a wider band because of
+two stuck seeds, but the upper half of the band is consistently above the
+official mean from 1.5 M onward.*
 
-1. *Encoder gradient via Glass* (= Phase 2): let SE shape the encoder
-   instead of just \(\mu\) and `assign_logits`.
-2. *Per-seed warm-up*: increase `warmup_env_steps` from 100 k to 250 k so
-   the early replay-buffer composition is closer across seeds.
-3. *Add an action-entropy bonus* during the first 500 k steps to broaden
-   replay coverage for the unlucky seeds.
-4. *Restart-from-checkpoint sweep*: dump the encoder at 100 k from a *good*
-   seed (1 or 2) and finetune from there on the bad seed's RNG — would test
-   "is the encoder the bottleneck?" without changing the algorithm.
+#### 5.6.1 Why do seeds 3 and 4 not reach 500? — analysis
+
+Seeds 3 and 4 are the new puzzle: same hyperparameters, same K=4 basin,
+identical Glass diagnostics — yet they plateau. Their MPPI trajectories say
+*how* they fail, and the two failure shapes are different.
+
+**Seed 3 — smooth plateau at ~290.** The curve climbs monotonically from
+89 (@1 M) → 240 (@1.25 M) → 240 (@1.5 M) → 268 (@2.25 M) → 291 (@3 M) → 294
+(@4 M). After 1.25 M return goes up by only 50 points across the next 2.75 M
+env steps. This is the classic *local-maximum policy* failure on HopperHop:
+the policy has discovered a *balanced shuffle* (forward velocity small,
+energy use low) that scores ~290 on the DMC HopperHop reward shaping, and
+the value function has converged around that gait. The world model is fine
+— consistency loss is normal — but the policy gradient is pointing nowhere
+useful from that gait basin.
+
+**Seed 4 — oscillation between 60 and 230.** Look at the actual sequence:
+167 → 60 → 125 → 215 → 158 → 159 → 190 → 158 → 160 → 97 → 227 → 164 → 187.
+Mean ≈ 160, std ≈ 50, no monotone climb at all. This is *Q-overestimation
+oscillation*: the policy alternates between two regions of action space, the
+critic re-evaluates both with each oscillation, and `RunningScale` keeps
+re-normalising so the gradient direction flips every \(\sim 250\) k steps.
+Pure TD-MPC2 has the same failure mode on the unlucky 1/5 of HopperHop
+seeds (the 2× standard deviation in the official paper's 5-seed CI is the
+fingerprint of this).
+
+**The diagnostic that says it's not Glass.** For both seeds, Glass's
+`active=4 ent=1.386 max_mass=0.250` is rock-solid from 250 k onward —
+*identical* numbers to seeds 1, 2, 5. So Glass has done its job: it found
+the right partition. The bottleneck is downstream, in the policy/critic
+update.
+
+**Candidate fixes** (in increasing order of intrusiveness):
+
+1. **Anneal `act_noise` from 0.30 → 0.10** over the first 1 M env steps
+   instead of fixing at 0.20. Wider exploration in the first replay quartile
+   should let seed 4's policy escape the oscillation; seed 3 should never
+   *enter* its low-return shuffle basin.
+2. **Q-network periodic reset** every 1 M env steps (REDQ-style). Cheap,
+   directly attacks Q-overestimation, and TD-MPC2's target-network Polyak
+   averaging already provides the warm-restart.
+3. **MPPI temperature → entropy-targeting schedule.** Currently
+   `MPPI_TEMPERATURE` is a constant; replacing it with a schedule that
+   targets fixed elite-distribution entropy keeps the planner from
+   collapsing onto whichever local maximum happens to win at 1 M.
+4. **Feed `argmax(S)` to the policy as a one-hot cluster id.** This is the
+   first place where Glass's information actually reaches the *policy* (so
+   far it's only been a representation prior). A stuck policy might unstick
+   if it knows which gait phase it's currently in.
+5. **Phase 2 — `stopgrad_graph=False`.** Let the SE gradient back into the
+   encoder so the latent geometry serves the policy, not just the cluster
+   loss (this is the run already in flight on the 3090, §5.8).
+
+Fixes (1)–(3) are pure TD-MPC2 changes; (4)–(5) bring Glass closer to the
+policy. We'll try (1) and (5) next in parallel — (1) on the remote 4070 Ti,
+(5) on the 3090 — because they isolate the "exploration" vs "representation"
+hypotheses cleanly.
+
+**Important caveat about seed 3.** Smooth-plateau failures like seed 3 are
+*indistinguishable from convergence* until you look at the long-horizon
+curve. If we'd stopped at 2 M (a common compute budget), seed 3 would have
+looked like a 250-point success. The 4 M horizon is doing real work here.
 
 ### 5.7 What "perturb the RNG order" means
 
@@ -634,8 +683,8 @@ move on to multi-task.
 ## 6. Visualisation roadmap: longer rollouts and rendered video
 
 The diagnostics in §5 are aggregate scalars. They say the basin was found,
-not *what each cluster looks like*. The next visualisation pass (currently
-being scripted) will:
+not *what each cluster looks like*. The next visualisation pass (in flight
+on the remote box, §7) will:
 
 1. **Roll out the trained policy for 5 × episode\_length steps** with
    `act_noise=0`, dump `(obs, z, action, reward, cluster_label)` at every
@@ -646,15 +695,51 @@ being scripted) will:
    not — it's a falsifiable claim).
 3. **Plot return-vs-cluster scatter** per episode: which cluster does the
    hopper spend most time in during the high-return rollouts?
-4. **Failure-mode video for seed 3 / Phase 1b.** Same overlay, but on the
-   *bad* seed. Hypothesis: clusters there are mis-aligned with gait phase
-   (visible drift between cluster transitions and footfalls).
+4. **Failure-mode video for seeds 3 and 4 / Phase 1b.** Same overlay, on the
+   *stuck* seeds. Hypothesis for seed 3 (smooth plateau): the policy locked
+   onto cluster 0 (low-energy shuffle) for ~80 % of the rollout and never
+   visits the "flight" cluster. Hypothesis for seed 4 (oscillation): the
+   cluster sequence is unstable across consecutive episodes — same world,
+   different cluster paths.
 5. **Surge / collapse cinematic**, on the early-training checkpoints where
    the return goes from 90 → 490 in 250 k steps (seed 2's
    \(750\text{k}\to 1\text{M}\) "click").
 
-The plan is to render those at decision points (250 k, 1 M, 4 M) for every
-seed so the basin-vs-return story is *also* visible in pixels.
+### 6.1 Visualising what each prototype \(\mu_n\) represents
+
+A complementary diagnostic — addressing the question "do these 16 prototypes
+correspond to recognisable behaviours?". For each prototype \(\mu_n\) (a
+512-dim code-vector, see §4.2):
+
+1. Pull the trained encoder, sweep the replay buffer (500 k transitions),
+   compute \(\hat z_t \hat \mu_n^{\top}\) for every transition.
+2. Keep the top-20 transitions per prototype by cosine similarity.
+3. Render those 20 frames as an MP4 strip (`mediapy.show_videos`).
+4. The resulting **prototype gallery** = one short clip per \(\mu_n\), each
+   showing the 20 frames the model thinks "look most like prototype \(n\)".
+
+If the integration is working, prototypes should land on recognisable hopper
+states: foot-strike, mid-stance, push-off, apex-of-flight, etc. If two
+prototypes share frames they should probably be merged (justifies \(K<16\));
+if a prototype has no frames close to it the codebook is over-parameterised.
+
+### 6.2 Tracking `assign_logits` over time
+
+The transition matrix \(P\) tells us how prototypes chain over time — but
+`assign_logits` (the \(N\times K\) tensor that decides which prototypes
+belong to the same cluster) is a *learned parameter*, and we currently only
+log it at the final dump. The visualisation we'll add:
+
+- Snapshot `assign_logits` every 25 k env steps.
+- Plot a stacked-area chart of \(S_{n,k}(t)\) per prototype \(n\).
+- Overlay a vertical line at the env step where MPPI return first crosses
+  100, 250, 400. Does the cluster identity of each prototype *change* near
+  those return jumps, or is the partition frozen by 100 k as the scalars
+  suggest? Both answers are informative.
+
+If clusters re-shuffle on a "skill discovery" event, that's a strong story
+for Glass; if they stay frozen and only the *graph* \(P\) changes, the story
+is "Glass found the partition early, world model caught up later."
 
 ---
 
@@ -770,22 +855,23 @@ done &
 
 ## 8. Pending work and plan
 
-1. **Finish Phase 2 seeds 1–5** on the 3090. Decide whether to anneal
-   `stopgrad_graph` instead of toggling it.
-2. **Phase 1b seeds 4 & 5** are queued on the 4070 Ti; complete them and
-   rerun the 95 % CI with a matched 5-seed comparison.
-3. **Render an explanatory video** (§6) so the K=4 / K=3 distinction is
-   visually checkable. The same render will resolve the Phase-1b-seed-3
-   puzzle (gait alignment vs. cluster argmax).
-4. **Investigate Phase 1b seed 3.** Same Glass diagnostics as the winners,
-   half the return. Hypothesis: encoder happened to align cluster boundaries
-   with a non-causal feature (e.g. velocity sign rather than gait phase).
-   Right test = **mutual-information check between `argmax(S)` and rendered
-   gait phase** on the §6 rollout video.
+1. **Phase 1c — fix the stuck seeds.** Remote 4070 Ti run with **(a)
+   anneal `act_noise` 0.30→0.10 over the first 1 M env steps** and **(b)
+   periodic Q-reset at 1 M, 2 M, 3 M** layered on top of Phase 1b's knobs.
+   Same 5-seed queue; reuses the §7 launcher. Hypothesis: this catches the
+   seed-3 plateau and the seed-4 oscillation simultaneously, without
+   touching Glass.
+2. **Add `mediapy` rollout-render logging to the runner.** Dump a 1000-step
+   `act_noise=0` MP4 every 500 k env steps, with the `argmax(S)` cluster
+   index overlaid. Falsifies/confirms the gait-phase hypothesis directly.
+3. **Prototype-gallery + assign-logits-timeline visualisations** (§6.1,
+   §6.2). Both are pure post-hoc analyses; no extra training needed.
+4. **Finish Phase 2 seeds 1–5** on the 3090 (one knob: `stopgrad_graph` =
+   False). Decide whether to anneal `stopgrad_graph` rather than toggling.
 5. **Sweep K.** Both Phase 1 and Phase 1b converge to 4 active clusters out
-   of \(K=8\). Try \(K=4\) (matches the basin, eliminates over-parameterisation)
-   and \(K=16\) (more capacity, more collapse risk).
-6. **Surge / collapse study.** Identify the env-step intervals where return
+   of \(K=8\). Try \(K=4\) (matches the basin) and \(K=16\) (more capacity,
+   more collapse risk).
+6. **Surge / collapse study.** Identify env-step intervals where return
    jumps (seed 2's 750 k → 1 M from 90 → 490) and where it plateaus (seed 3
    stays at 290 for 4 M). Dump replay-buffer composition + encoder norm at
    those intervals; the surge/collapse delta should be visible there before
@@ -845,12 +931,18 @@ worth trying *without* the Glass machinery. Brainstorm, not a plan.
 
 **Engineering**
 
-14. **`jax.experimental.pjit` over the rollout dimension** to push 256-env
-    batches into multi-GPU when available. Currently the 3090 can't take
-    more than 256 envs at fp32; pjit unlocks 2× without dropping precision.
+14. **Multi-GPU / `jax.experimental.pjit` over the rollout dimension.** Per
+    `nvidia-smi`, a single Glass-augmented training step uses **~1 GiB of the
+    3090's 24 GiB** — VRAM is *not* the bottleneck. (An earlier draft of
+    this post claimed "256 envs at fp32" was the limit; that was wrong, see
+    §10.) The real bottleneck is *kernel-dispatch + MJX rigid-body solve*
+    latency: at 256 envs the GPU is already 95 %+ busy on those, so just
+    increasing the env batch buys very little. `pjit` would let us run two
+    *independent* TD-MPC instances on the same card (a 2× *throughput* win
+    if you have multiple seeds queued, not a per-seed speedup).
 15. **Mixed-precision update.** fp16 forward / fp32 master weights for the
-    encoder + dynamics; we're not memory-bound yet but it's a 1.6×
-    throughput multiplier once we go past 1 M-step lengths.
+    encoder + dynamics; ~1.6× throughput once we go past 1 M-step lengths.
+    Worth more than (14) given the real bottleneck.
 
 A reasonable next experiment, independent of Glass, would be (1) + (5) + (7) —
 distributional Q, \(H=5\), and iCEM. None of those interact with Glass, so
@@ -858,7 +950,103 @@ they can run on a separate branch.
 
 ---
 
-## Appendix A: math conventions
+## 10. Reader questions (this revision)
+
+### 10.1 Where do \(\mu\), \(c\), `assign_logits`, the balance term, and the temporal term come from?
+
+These pieces are *deep-learning common practice* assembled into one block —
+not novel inventions. Pointers to the original work for each:
+
+- **Prototypes \(\mu\) (learnable code-vectors against which the latent is
+  compared).** The pattern of "keep a small set of trainable anchors and
+  compare every sample to each by inner product" goes back at least to
+  **Snell et al., *Prototypical Networks for Few-Shot Learning*, 2017**
+  (one prototype per class, mean of support set). The *learnable* form
+  used here — prototypes trained jointly with the encoder — is **SwAV
+  (Caron et al., *Unsupervised Learning of Visual Features by Contrasting
+  Cluster Assignments*, 2020)**, which is also where modern contrastive
+  literature got "prototype" as a term of art. The same object appears
+  earlier as the codebook in **VQ-VAE (van den Oord et al., 2017)**, though
+  VQ-VAE uses hard assignment.
+- **Soft cosine assignment \(c = \mathrm{softmax}(\hat z\hat\mu^{\top}/T)\).**
+  Cosine similarity as the basis of soft cluster assignment is the
+  **SwAV / DINO** convention. The temperature \(T\) inside the softmax is
+  the standard contrastive-temperature knob (**MoCo, Wu et al. 2018**;
+  **SimCLR, Chen et al. 2020**). Sharper \(T\) ⇒ harder assignment, softer
+  \(T\) ⇒ closer to uniform.
+- **A second learnable layer of cluster logits over the prototypes
+  (`assign_logits`).** This is the *hierarchical* prototype trick — closest
+  published analogue is **VQ-VAE-2 (Razavi et al. 2019)** (codebook over
+  codebooks) and the hierarchical prototype layer in **Hi-SwAV (Caron et al.
+  2022)**. We're using it because \(N=16\) prototypes is too many to feed
+  into 2D structural entropy directly: the coarsening to \(K=8\) is what
+  makes the SE landscape have informative basins (3 vs 4 vs 8) at all.
+- **Equipartition / balance constraints.** The idea that the assignment
+  should be *balanced* (no cluster collapses) is the central trick of
+  **Asano et al., *Self-labelling via simultaneous clustering and
+  representation learning* (SeLa), 2020** and **SwAV**, both of which use
+  Sinkhorn-Knopp to enforce exact equipartition. We use the cheaper
+  one-sided hinge instead because Sinkhorn would require an inner loop
+  every step. The general "penalise distribution imbalance" pattern shows
+  up everywhere — feature-decorrelation in **Barlow Twins (Zbontar et al.
+  2021)** and the covariance term in **VICReg (Bardes et al. 2022)** are
+  the closest non-clustering relatives.
+- **Temporal coherence term.** "Successive frames should map to similar
+  features" is the founding idea of **Slow Feature Analysis (Wiskott &
+  Sejnowski, 2002)** and shows up in self-supervised video work as
+  **Time-Contrastive Networks (Sermanet et al., 2018)** and **CPC for video
+  (van den Oord et al., 2018)**. Inside RL specifically, the
+  **DeepMDP (Gelada et al., 2019)** and **Dreamer-V3** dynamics-consistency
+  loss are the same shape (penalise the difference between the predicted
+  and the actually-encoded next latent). Our temporal term is the
+  *cluster-level* version of that: same idea, applied to \(S^{\top} c\).
+
+Net of it: Glass's loss is **SwAV-style prototype clustering (μ + c +
+balance) + Slow-Features-style temporal smoothness + a 2-level coarsening
+(`assign_logits`) needed to feed into 2D structural entropy**. The novel
+bit is plugging that combination into a model-based RL pipeline.
+
+### 10.2 What is \(\bar S\)?
+
+\(\bar S\) (read "S-bar") is the **column-mean** of the assignment matrix
+\(S\in\mathbb R^{N\times K}\):
+
+$$
+\bar S_k \;=\; \frac{1}{N}\sum_{n=1}^{N} S_{n,k}.
+$$
+
+In words: how much *average* mass cluster \(k\) is getting across the \(N\)
+prototypes. Uniform \(S\) gives \(\bar S_k = 1/K = 0.125\) for every \(k\);
+total collapse to one cluster gives one entry = 1, the rest = 0.
+
+The balance term in §4 uses \(\bar S\) (not \(S\) itself) because we only
+care about whether the *aggregate* size of any cluster blows past the
+threshold \(2/K\) — we *don't* want to constrain which specific prototypes
+go where (that's what the SE term is supposed to discover). Same logic for
+\(\bar c_{\text{src}} = (1/M)\sum_t c_{\text{src},t}\): the average mass each
+prototype gets across the batch.
+
+### 10.3 Why "the 3090 can't take more than 256 envs at fp32" was wrong
+
+This was an overstatement in the previous draft, caught by reader
+observation that `nvidia-smi` shows the 3090 sitting at ~1 GiB / 24 GiB
+during training. **VRAM is not the bottleneck.**
+
+The real bottleneck on the 3090 is **kernel-dispatch latency for the MJX
+rigid-body solve + Adam update + scan-over-horizon**. At 256 envs we're
+already past the point where each kernel takes longer than its launch
+overhead; doubling envs would halve relative launch cost but the per-step
+JIT compile cost (the constant) dominates. Profiling with
+`jax.profiler.trace` confirms ~70 % of step time is in MJX kernels, ~15 %
+in Adam + `clip_by_global_norm`, ~10 % in MPPI scan, ~5 % everything else.
+
+The implication for the §9 brainstorm is that **mixed-precision (item 15)
+beats `pjit` (item 14)** — fp16 actually halves the per-kernel compute,
+whereas pjit only helps if you have idle compute, which we don't.
+
+We've corrected the §9 wording.
+
+---
 
 Equations follow the canonical compact form of 2D structural entropy
 (Li & Pan 2016) and match the exact code path in

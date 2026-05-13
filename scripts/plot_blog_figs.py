@@ -101,14 +101,12 @@ def fig_ci():
         ax.fill_between(grid[valid], lo, hi, color="tab:red", alpha=0.15,
                         label="Phase1 95% CI")
 
-    # Phase 1b (partial)
+    # Phase 1b (5 seeds final)
     cs = []
     for seed, df in p1b.items():
         ax.plot(df["step"], df["reward"],
-                color=plt.cm.Blues(0.45 + 0.18 * (seed - 1)),
-                lw=1.4, alpha=0.85,
-                label=f"Phase1b seed {seed} "
-                      f"({df['step'].iloc[-1]/1e6:.2f}M)")
+                color=plt.cm.Blues(0.40 + 0.12 * (seed - 1)),
+                lw=1.1, alpha=0.55)
         cs.append(interp(df, grid))
     if len(cs) >= 2:
         arr = np.stack(cs)
@@ -116,12 +114,14 @@ def fig_ci():
         if valid.any():
             m, lo, hi = mean_ci([c[valid] for c in cs])
             ax.plot(grid[valid], m, color="tab:blue", lw=2.4,
-                    label=f"Phase1b mean ({len(p1b)} seeds, partial)")
+                    label=f"Phase1b mean ({len(p1b)} seeds)")
+            ax.fill_between(grid[valid], lo, hi, color="tab:blue",
+                            alpha=0.13, label="Phase1b 95% CI")
 
     ax.set_xlabel("environment steps")
     ax.set_ylabel("MPPI return (HopperHop)")
     ax.set_title(f"TD-MPC-Glass: Phase 1 ({len(p1)} seeds) vs Phase 1b "
-                 f"({len(p1b)} seeds) vs Official TD-MPC2")
+                 f"({len(p1b)} seeds, final) vs Official TD-MPC2")
     ax.grid(True, alpha=0.25)
     ax.set_xlim(0, 4_000_000)
     ax.set_ylim(bottom=-10)
@@ -259,7 +259,43 @@ def fig_failure_seed4():
     print(f"wrote {out}")
 
 
+def fig_phase1b_basin():
+    """Phase-1b: every seed locked onto K=4 but returns are bimodal.
+    Plot return-vs-seed coloured by whether MPPI return at 4M is above/below
+    the 400-line, with the K=4 basin annotated on every point."""
+    p1b = load_mppi(P1B_DIR)
+    finals = {s: float(df.iloc[-1]["reward"]) for s, df in p1b.items()}
+    peaks  = {s: float(df["reward"].max())   for s, df in p1b.items()}
+    fig, ax = plt.subplots(figsize=(8.5, 4.6), dpi=170)
+    for s in sorted(finals):
+        col = "tab:blue" if finals[s] >= 400 else "tab:red"
+        ax.bar(s - 0.18, peaks[s], width=0.34, color=col, alpha=0.35,
+               edgecolor=col, label=("peak (good)" if (col == "tab:blue" and s == min(k for k in finals if finals[k] >= 400)) else
+                                     ("peak (stuck)" if (col == "tab:red"  and s == min(k for k in finals if finals[k] <  400)) else None)))
+        ax.bar(s + 0.18, finals[s], width=0.34, color=col,
+               label=("final 4M (good)" if (col == "tab:blue" and s == min(k for k in finals if finals[k] >= 400)) else
+                      ("final 4M (stuck)" if (col == "tab:red"  and s == min(k for k in finals if finals[k] <  400)) else None)))
+        ax.text(s, max(peaks[s], finals[s]) + 18,
+                f"K=4\nfinal {finals[s]:.0f}", ha="center", fontsize=8)
+    ax.axhline(449.2, ls="--", color="black", alpha=0.5,
+               label="Official 5-seed mean (449.2)")
+    ax.axhline(np.mean(list(finals.values())), ls=":", color="tab:blue",
+               alpha=0.7, label=f"Phase1b mean ({np.mean(list(finals.values())):.1f})")
+    ax.set_xlabel("Phase 1b seed")
+    ax.set_ylabel("MPPI return")
+    ax.set_title("Phase 1b 5-seed results — all K=4, but returns are bimodal")
+    ax.set_xticks(sorted(finals))
+    ax.grid(True, alpha=0.25, axis="y")
+    ax.legend(loc="upper left", fontsize=8, ncol=2)
+    ax.set_ylim(0, max(peaks.values()) * 1.25)
+    fig.tight_layout()
+    out = OUT / "blog_phase1b_basin.png"
+    fig.savefig(out)
+    print(f"wrote {out}")
+
+
 if __name__ == "__main__":
     fig_ci()
     fig_cluster_return()
     fig_failure_seed4()
+    fig_phase1b_basin()
