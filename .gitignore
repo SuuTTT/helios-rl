@@ -5,6 +5,7 @@ __pycache__/
 *.pyd
 *.pyc
 .Python
+*.mp4
 
 # Distribution / packaging
 build/

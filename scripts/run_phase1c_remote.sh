@@ -30,6 +30,12 @@ set +e
 REPO=${REPO:-/root/helios-rl}
 cd "$REPO" || { echo "[phase1c] repo not found at $REPO"; exit 1; }
 
+# Activate the project venv if present (vast.ai box convention: /root/venv).
+if [[ -f /root/venv/bin/activate ]]; then
+  # shellcheck disable=SC1091
+  source /root/venv/bin/activate
+fi
+
 export PYTHONPATH=$REPO/src:/root/mujoco_playground_repo:${PYTHONPATH:-}
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_PYTHON_CLIENT_MEM_FRACTION=${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.85}
