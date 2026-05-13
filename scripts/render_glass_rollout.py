@@ -94,6 +94,8 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--height", type=int, default=240)
     ap.add_argument("--width", type=int, default=320)
+    ap.add_argument("--camera", type=str, default="cam0",
+                    help="MuJoCo camera name (default cam0 = trackcom side view). Pass empty string for the free static camera.")
     ap.add_argument("--use_mppi", action="store_true",
                     help="render with MPPI planning (slower) instead of the bare policy")
     args = ap.parse_args()
@@ -146,7 +148,8 @@ def main():
     # Render and stitch
     all_frames = []
     for traj, labs, rets in zip(all_traj, all_labels, all_returns):
-        frames = env.render(traj, height=args.height, width=args.width)
+        cam = args.camera if args.camera else None
+        frames = env.render(traj, height=args.height, width=args.width, camera=cam)
         frames = overlay_cluster_label(list(frames), labs, rets)
         all_frames.extend(frames)
         # 8-frame black separator between episodes

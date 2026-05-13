@@ -477,6 +477,9 @@ def train_tdmpc2(
     resume_checkpoint: str | None = None,
     save_full_state: bool = False,
     glass_overrides: dict | None = None,
+    act_noise_start: float | None = None,
+    act_noise_end: float | None = None,
+    act_noise_anneal_steps: int = 1_000_000,
 ) -> None:
     """Train TD-MPC2 or TD-MPC-Glass."""
     algo_name = "TD-MPC-Glass" if use_glass else "TD-MPC2"
@@ -513,6 +516,17 @@ def train_tdmpc2(
     WARMUP     = d["WARMUP_ENV"]   # 25_000
     EXPL_NOISE = d["EXPL_NOISE"]   # 0.3
     EXPL_UNTIL = d["EXPL_UNTIL"]   # 25_000
+    # Optional act-noise anneal: linearly decay from start -> end over
+    # `act_noise_anneal_steps` env steps. Defaults reproduce baseline behaviour
+    # (constant EXPL_NOISE).
+    _noise_start = float(act_noise_start) if act_noise_start is not None else float(EXPL_NOISE)
+    _noise_end   = float(act_noise_end)   if act_noise_end   is not None else _noise_start
+    _noise_anneal_steps = max(int(act_noise_anneal_steps), 1)
+    def _current_noise(es: int) -> float:
+        frac = min(max(es / _noise_anneal_steps, 0.0), 1.0)
+        return _noise_start + (_noise_end - _noise_start) * frac
+    if _noise_start != _noise_end:
+        print(f"  act-noise anneal: {_noise_start:.3f} -> {_noise_end:.3f} over {_noise_anneal_steps:,} env-steps", flush=True)
     H          = d["H"]            # 3
     NS         = d["NS"]           # 512
     elites     = d["NUM_ELITES"]   # 64
@@ -816,7 +830,8 @@ def train_tdmpc2(
                 acts_np = rng_np.uniform(al, ah, (N_ENVS, act_dim)).astype(np.float32)
             else:
                 acts_jax = act_fn_batch(params, jnp.asarray(obs_np))
-                noise    = rng_np.normal(0, EXPL_NOISE, (N_ENVS, act_dim))
+                _sigma   = _current_noise(env_steps)
+                noise    = rng_np.normal(0, _sigma, (N_ENVS, act_dim))
                 acts_np  = np.clip(np.array(acts_jax) + noise, al, ah).astype(np.float32)
 
             env_state = batch_step(env_state, jnp.asarray(acts_np))
@@ -983,6 +998,12 @@ def parse_args():
                     help="Override TD-MPC-Glass num_clusters")
     ap.add_argument("--glass_assign_logits_init_scale", type=float, default=None,
                     help="Override TD-MPC-Glass assign_logits_init_scale")
+    ap.add_argument("--act_noise_start", type=float, default=None,
+                    help="Initial exploration-noise std (default: 0.3, the EXPL_NOISE constant)")
+    ap.add_argument("--act_noise_end", type=float, default=None,
+                    help="Final exploration-noise std after annealing (default: same as --act_noise_start, i.e. no anneal)")
+    ap.add_argument("--act_noise_anneal_steps", type=int, default=1_000_000,
+                    help="Env-steps over which to linearly anneal noise from start to end (default: 1M)")
     return ap.parse_args()
 
 
@@ -1031,6 +1052,9 @@ def main():
                         resume_checkpoint=args.resume_checkpoint,
                         save_full_state=args.save_full_state,
                         glass_overrides=glass_overrides,
+                        act_noise_start=args.act_noise_start,
+                        act_noise_end=args.act_noise_end,
+                        act_noise_anneal_steps=args.act_noise_anneal_steps,
                     )
                 else:
                     print(f"Unknown algo: {algo}", flush=True)
