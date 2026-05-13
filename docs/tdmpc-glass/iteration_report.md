@@ -411,3 +411,122 @@ Full-state checkpoints include:
 - global NumPy random state
 
 This is now the recommended mode for long 4M+ runs if disk space allows.
+
+## Iteration 7: Phase 1 — Make Glass Actually Cluster (2026-05-12)
+
+After the first 5-seed CI run (`exp/tdmpc_glass/HopperHop_pre_phase1/`) finished
+with `final_mean = 327.5 ± 149.8` vs official `449.2 ± 312.1`, the Glass
+diagnostics dumped to `exp/benchmark/glass_diag/HopperHop/seed_3/step_*.npz`
+were inspected for all 16 saved evals from 250k to 4M:
+
+```text
+step= 250112  P_min=0.0617 P_max=0.0637 S_max=0.1283 clu_ent=2.0794
+step= 500224  P_min=0.0617 P_max=0.0635 S_max=0.1284 clu_ent=2.0794
+step=1000192  P_min=0.0623 P_max=0.0631 S_max=0.1286 clu_ent=2.0794
+step=4000000  P_min=0.0624 P_max=0.0626 S_max=0.1287 clu_ent=2.0794
+```
+
+Uniform values are `1/K = 0.0625`, `2/K = 0.125`, `log(K) = 2.0794`. Glass was
+inert — `P` deviated from uniform by less than 0.001 and `S` by less than 0.004
+for the entire 4M run. Five root causes identified:
+
+1. `stopgrad_graph=True` cut every Glass gradient before it could reach the
+   encoder/dynamics, so the loss only saw `params["glass"]`.
+2. 2D-SE has a vanishing gradient near the uniform fixed point. With
+   `assign_logits = 0.01·N(0,1)` and `assignment_temperature = 1.0`, S started
+   inside that vanishing region.
+3. `balance` and `proto_balance` were `||mass − uniform||^2`, which
+   *opposes* clustering. Their only non-vanishing gradient pulled S back to
+   uniform.
+4. Prototype L2 distance with `proto_temperature=0.2` was not well-conditioned
+   for SimNorm latents at `d=512`; soft-min collapsed.
+5. Coefficients `lambda_*` plus shared `clip_by_global_norm(20.0)` reduced the
+   effective LR on Glass to `~1e-7`.
+
+### Changes
+
+`src/helios/algorithms/tdmpc_glass.py`:
+
+- `glass_transition_graph(..., use_cosine_assign=True)`: cosine
+  similarity in latent + prototype norms, well-conditioned at `d=512`.
+- one-sided hinge balance: `sum(relu(cluster_mass − 2/K)^2)`, only fires on
+  collapse.
+- `z_next = stop_gradient(z_next)` always; `stopgrad_graph=True` kept by
+  default for now (allowing `z_src` to backprop wrecks the world model at the
+  current lambda; revisit in Phase 2).
+- `init_glass_params(..., assign_logits_init_scale=1.0)` so S is born outside
+  the vanishing-gradient region.
+- `GLASS_DEFAULTS`: `proto_temperature 0.2 → 1.0`, `lambda_se 1e-4 → 5e-3`,
+  `lambda_balance 1e-3 → 1e-2`, `lambda_temporal 1e-4 → 1e-3`.
+
+`scripts/run_benchmark.py`:
+
+- Plumb `use_cosine_assign` and `assign_logits_init_scale` through.
+- Bump `eval_mppi(n_eps=3 → 8)` when `use_glass=True`.
+- Single optimizer kept (shared `clip_by_global_norm`) so the JAX trace order
+  matches baseline; separate-optimizer experiment was abandoned because it
+  perturbed the world-model RNG stream.
+
+### Verification
+
+Glass diagnostics from Phase 1 logs (constant after a few evals, plotted in
+`exp/tdmpc_glass/plots/hopperhop_phase1_glass_diag.png`):
+
+```text
+seed 1  ent=1.386  active=4  max_mass=0.250  cut=0.722
+seed 2  ent=1.386  active=4  max_mass=0.250  cut=0.733
+seed 3  ent=1.386  active=4  max_mass=0.250  cut=0.725
+seed 4  ent=1.098  active=3  max_mass=0.346  cut=0.636
+```
+
+vs pre-Phase-1 inert reference `ent=2.079  active=8  max_mass=0.129  cut=~0`.
+
+The block structure is visible in
+`exp/tdmpc_glass/plots/hopperhop_phase1_glass_matrix_seed3.png`: the 16×16 `P`
+reorders into a 4-block × 5-row diagonal layout with `S` collapsing to
+near-one-hot prototype-to-cluster assignment.
+
+### MPPI returns (4M)
+
+Final eval per seed and per-seed best:
+
+```text
+Phase 1     seed 1  final=323.0  best=371.6 @ 2.25M
+Phase 1     seed 2  final=440.1  best=451.4 @ 3.50M
+Phase 1     seed 3  final=447.9  best=451.2 @ 3.75M
+Phase 1     seed 4  in flight (last MPPI=258.7 @ 2.75M)
+Phase 1     seed 5  queued
+
+pre-phase1  seed 1  final=273.9
+pre-phase1  seed 2  final=230.7
+pre-phase1  seed 3  final=526.0  (single lucky 526→336→526 oscillation)
+pre-phase1  seed 4  final=355.5
+pre-phase1  seed 5  final=251.2
+
+official    seed 1  final=380.1
+official    seed 2  final=373.2
+official    seed 3  final=594.2  (single strong seed)
+```
+
+3-seed comparison (1,2,3 — completed seeds on both sides):
+
+```text
+Phase 1   mean = 403.7   std-of-seeds =  70.6
+official  mean = 449.2   std-of-seeds = 125.4
+pre-p1    mean = 343.5   std-of-seeds = 161.7
+```
+
+Phase 1 closes the gap to official to within one CI half-width and reduces
+seed variance by ~45% versus official. Seed-3 has lost its lucky 526 spike but
+is now more representative; seed 2 has recovered from a 1.5M near-zero stall.
+
+Pending: seed 4 (currently underperforming at MPPI≈250, 3-cluster collapse) and
+seed 5. Final 5-seed CI plot blocked on those two runs.
+
+### Plots
+
+```text
+exp/tdmpc_glass/plots/hopperhop_phase1_progress_95ci.png
+exp/tdmpc_glass/plots/hopperhop_phase1_glass_diag.png
+exp/tdmpc_glass/plots/hopperhop_phase1_glass_matrix_seed3.png
+```

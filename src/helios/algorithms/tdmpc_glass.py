@@ -19,13 +19,17 @@ GLASS_DEFAULTS = dict(
     every_k_updates=4,
     num_prototypes=16,
     num_clusters=8,
-    proto_temperature=0.2,
+    proto_temperature=1.0,
     assignment_temperature=1.0,
-    lambda_se=1.0e-4,
-    lambda_balance=1.0e-3,
-    lambda_temporal=1.0e-4,
+    lambda_se=5.0e-3,
+    lambda_balance=1.0e-2,
+    lambda_temporal=1.0e-3,
     stopgrad_graph=True,
     diag_dump_matrices=True,
+    # Phase 1 additions
+    assign_logits_init_scale=1.0,
+    glass_lr_mult=10.0,
+    use_cosine_assign=True,
 )
 
 
@@ -119,13 +123,18 @@ def init_glass_params(
     latent_dim: int,
     num_prototypes: int = 32,
     num_clusters: int = 8,
+    assign_logits_init_scale: float = 1.0,
 ) -> dict:
     """Initialize prototype and assignment parameters for TD-MPC-Glass."""
     pk, sk = jax.random.split(key)
     proto_raw = jax.random.normal(pk, (num_prototypes, latent_dim))
     proto_groups = 8 if latent_dim % 8 == 0 else 1
     prototypes = simnorm(proto_raw, V=proto_groups)
-    assign_logits = 0.01 * jax.random.normal(sk, (num_prototypes, num_clusters))
+    # Larger init breaks the near-uniform symmetry of S (uniform softmax has
+    # vanishing 2D-SE gradient).
+    assign_logits = assign_logits_init_scale * jax.random.normal(
+        sk, (num_prototypes, num_clusters)
+    )
     return {
         "prototypes": prototypes,
         "assign_logits": assign_logits,
@@ -179,22 +188,43 @@ def glass_transition_graph(
     z_src: jax.Array,
     z_next: jax.Array,
     glass_params: dict,
-    proto_temperature: float = 0.2,
+    proto_temperature: float = 1.0,
     assignment_temperature: float = 1.0,
-    stopgrad_graph: bool = True,
+    stopgrad_graph: bool = False,
+    use_cosine_assign: bool = True,
     eps: float = 1e-8,
 ) -> dict:
-    """Build a prototype transition graph and cluster diagnostics."""
+    """Build a prototype transition graph and cluster diagnostics.
+
+    Phase 1 changes:
+        - ``stopgrad_graph`` defaults to False so encoder/dynamics receive a
+          gradient from the Glass loss through ``z_src``. ``z_next`` is still
+          stop-gradiented to avoid a bootstrap loop.
+        - Cosine assignment (default) is well-conditioned for SimNorm latents.
+        - Balance terms are one-sided hinges that only fire on cluster
+          collapse, so they do not pin S to uniform.
+    """
+    # Always stop gradient on z_next to avoid bootstrap; optionally allow
+    # gradient through z_src so Glass shapes the encoder/dynamics.
+    z_next = jax.lax.stop_gradient(z_next)
     if stopgrad_graph:
         z_src = jax.lax.stop_gradient(z_src)
-        z_next = jax.lax.stop_gradient(z_next)
 
     prototypes = glass_params["prototypes"]
     assign_logits = glass_params["assign_logits"]
 
-    def soft_assign(z):
-        dist2 = jnp.sum((z[:, None, :] - prototypes[None, :, :]) ** 2, axis=-1)
-        return jax.nn.softmax(-dist2 / proto_temperature, axis=-1)
+    if use_cosine_assign:
+        def soft_assign(z):
+            zn = z / (jnp.linalg.norm(z, axis=-1, keepdims=True) + eps)
+            pn = prototypes / (
+                jnp.linalg.norm(prototypes, axis=-1, keepdims=True) + eps
+            )
+            sim = zn @ pn.T  # (N, P), in [-1, 1]
+            return jax.nn.softmax(sim / proto_temperature, axis=-1)
+    else:
+        def soft_assign(z):
+            dist2 = jnp.sum((z[:, None, :] - prototypes[None, :, :]) ** 2, axis=-1)
+            return jax.nn.softmax(-dist2 / proto_temperature, axis=-1)
 
     c_src = soft_assign(z_src)
     c_next = soft_assign(z_next)
@@ -206,11 +236,13 @@ def glass_transition_graph(
 
     S = jax.nn.softmax(assign_logits / assignment_temperature, axis=-1)
     cluster_mass = jnp.mean(S, axis=0)
-    uniform_mass = jnp.full_like(cluster_mass, 1.0 / cluster_mass.shape[0])
-    balance = jnp.sum((cluster_mass - uniform_mass) ** 2)
+    K = cluster_mass.shape[0]
+    # One-sided hinge: only penalise when a single cluster absorbs > 2/K mass.
+    # Square keeps the term smooth at the threshold.
+    balance = jnp.sum(jax.nn.relu(cluster_mass - 2.0 / K) ** 2)
     proto_mass = jnp.mean(c_src, axis=0)
-    proto_uniform = jnp.full_like(proto_mass, 1.0 / proto_mass.shape[0])
-    proto_balance = jnp.sum((proto_mass - proto_uniform) ** 2)
+    Kp = proto_mass.shape[0]
+    proto_balance = jnp.sum(jax.nn.relu(proto_mass - 2.0 / Kp) ** 2)
 
     s_src = jnp.matmul(c_src, S)
     s_next = jnp.matmul(c_next, S)
@@ -241,12 +273,13 @@ def glass_loss_and_aux(
     z_src: jax.Array,
     z_next: jax.Array,
     glass_params: dict,
-    proto_temperature: float = 0.2,
+    proto_temperature: float = 1.0,
     assignment_temperature: float = 1.0,
-    lambda_se: float = 1.0e-4,
-    lambda_balance: float = 1.0e-3,
-    lambda_temporal: float = 1.0e-4,
-    stopgrad_graph: bool = True,
+    lambda_se: float = 5.0e-3,
+    lambda_balance: float = 1.0e-2,
+    lambda_temporal: float = 1.0e-3,
+    stopgrad_graph: bool = False,
+    use_cosine_assign: bool = True,
 ) -> tuple[jax.Array, dict]:
     """Return weighted Glass loss and scalar diagnostics."""
     diag = glass_transition_graph(
@@ -256,6 +289,7 @@ def glass_loss_and_aux(
         proto_temperature=proto_temperature,
         assignment_temperature=assignment_temperature,
         stopgrad_graph=stopgrad_graph,
+        use_cosine_assign=use_cosine_assign,
     )
     total = (
         lambda_se * diag["se"]
@@ -518,12 +552,13 @@ def make_update_fn(
     scale_max: float = 4.0,
     glass_enabled: bool = True,
     glass_every_k_updates: int = 4,
-    glass_proto_temperature: float = 0.2,
+    glass_proto_temperature: float = 1.0,
     glass_assignment_temperature: float = 1.0,
-    glass_lambda_se: float = 1.0e-4,
-    glass_lambda_balance: float = 1.0e-3,
-    glass_lambda_temporal: float = 1.0e-4,
-    glass_stopgrad_graph: bool = True,
+    glass_lambda_se: float = 5.0e-3,
+    glass_lambda_balance: float = 1.0e-2,
+    glass_lambda_temporal: float = 1.0e-3,
+    glass_stopgrad_graph: bool = False,
+    glass_use_cosine_assign: bool = True,
 ) -> tuple:
     """Build (single_step, multi_step) JIT-compiled update functions.
 
@@ -650,6 +685,7 @@ def make_update_fn(
                 lambda_balance=glass_lambda_balance,
                 lambda_temporal=glass_lambda_temporal,
                 stopgrad_graph=glass_stopgrad_graph,
+                use_cosine_assign=glass_use_cosine_assign,
             )
 
         def disabled_glass(_):
@@ -869,9 +905,10 @@ def make_mppi_fn(
 def make_glass_diag_fn(
     enc: Encoder,
     dyn: Dynamics,
-    proto_temperature: float = 0.2,
+    proto_temperature: float = 1.0,
     assignment_temperature: float = 1.0,
-    stopgrad_graph: bool = True,
+    stopgrad_graph: bool = False,
+    use_cosine_assign: bool = True,
 ):
     """Build a JIT diagnostic function returning small matrices and summaries."""
 
@@ -894,6 +931,7 @@ def make_glass_diag_fn(
             proto_temperature=proto_temperature,
             assignment_temperature=assignment_temperature,
             stopgrad_graph=stopgrad_graph,
+            use_cosine_assign=use_cosine_assign,
         )
         return {
             "P": diag["P"],

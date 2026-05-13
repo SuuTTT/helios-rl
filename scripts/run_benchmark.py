@@ -129,7 +129,15 @@ def train_ppo(env_id: str, total_steps: int, seed: int, csv_path: Path) -> None:
     steps_per_iter = update_epochs * num_steps * num_envs  # ≈ 246K
 
     # ── Environment
-    env      = registry.load(env_id)
+    force_jax_tasks = {
+        task.strip()
+        for task in os.environ.get("TDMPC_GLASS_FORCE_JAX_TASKS", "FishSwim").split(",")
+        if task.strip()
+    }
+    config_overrides = {"impl": "jax"} if use_glass and env_id in force_jax_tasks else None
+    if config_overrides:
+        print(f"  using env config overrides: {config_overrides}", flush=True)
+    env      = registry.load(env_id, config_overrides=config_overrides)
     env      = wrapper.wrap_for_brax_training(env, episode_length=episode_length,
                                               action_repeat=1)
     obs_dim  = env.observation_size
@@ -468,6 +476,7 @@ def train_tdmpc2(
     use_glass: bool = False,
     resume_checkpoint: str | None = None,
     save_full_state: bool = False,
+    glass_overrides: dict | None = None,
 ) -> None:
     """Train TD-MPC2 or TD-MPC-Glass."""
     algo_name = "TD-MPC-Glass" if use_glass else "TD-MPC2"
@@ -511,7 +520,9 @@ def train_tdmpc2(
     NI         = d["NI"]           # 6
     MIN_STD    = d["MIN_STD"]      # 0.05
     MAX_STD    = d["MAX_STD"]      # 2.0
-    glass_cfg  = d.get("glass", {})
+    glass_cfg  = dict(d.get("glass", {}))
+    if glass_overrides:
+        glass_cfg.update({k: v for k, v in glass_overrides.items() if v is not None})
     seq_len    = H + 1             # 4 — trajectory length in buffer
     buf_cap    = max(total_steps // N_ENVS + 1000, 50_000)
     eval_interval = 250_000 if env_id == "HopperHop" else max(total_steps // 12, 1)
@@ -551,12 +562,15 @@ def train_tdmpc2(
             latent_dim=latent_dim,
             num_prototypes=glass_cfg.get("num_prototypes", 32),
             num_clusters=glass_cfg.get("num_clusters", 8),
+            assign_logits_init_scale=glass_cfg.get("assign_logits_init_scale", 1.0),
         )
     tp    = params.copy()
     scale = jnp.array(1.0)
     glass_step = jnp.array(0, dtype=jnp.int32)
 
-    # ── Optimizer
+    # ── Optimizer (single shared chain so clip_by_global_norm sees the same
+    #  parameter set as baseline TD-MPC2; with stopgrad on the Glass graph the
+    #  glass subtree contributes negligible gradient norm).
     tx = optax.chain(
         optax.clip_by_global_norm(20.0),
         optax.adam(lr),
@@ -588,12 +602,13 @@ def train_tdmpc2(
             gamma=gamma, rho=rho, tau=tau, rew_scale=rew_scale,
             glass_enabled=glass_cfg.get("enabled", True),
             glass_every_k_updates=glass_cfg.get("every_k_updates", 4),
-            glass_proto_temperature=glass_cfg.get("proto_temperature", 0.2),
+            glass_proto_temperature=glass_cfg.get("proto_temperature", 1.0),
             glass_assignment_temperature=glass_cfg.get("assignment_temperature", 1.0),
-            glass_lambda_se=glass_cfg.get("lambda_se", 1.0e-4),
-            glass_lambda_balance=glass_cfg.get("lambda_balance", 1.0e-3),
-            glass_lambda_temporal=glass_cfg.get("lambda_temporal", 1.0e-4),
+            glass_lambda_se=glass_cfg.get("lambda_se", 5.0e-3),
+            glass_lambda_balance=glass_cfg.get("lambda_balance", 1.0e-2),
+            glass_lambda_temporal=glass_cfg.get("lambda_temporal", 1.0e-3),
             glass_stopgrad_graph=glass_cfg.get("stopgrad_graph", True),
+            glass_use_cosine_assign=glass_cfg.get("use_cosine_assign", True),
         )
     else:
         _, multi_step = make_update_fn(
@@ -614,11 +629,12 @@ def train_tdmpc2(
         glass_diag = make_glass_diag_fn(
             enc_net,
             dyn_net,
-            proto_temperature=glass_cfg.get("proto_temperature", 0.2),
+            proto_temperature=glass_cfg.get("proto_temperature", 1.0),
             assignment_temperature=glass_cfg.get("assignment_temperature", 1.0),
             stopgrad_graph=glass_cfg.get("stopgrad_graph", True),
+            use_cosine_assign=glass_cfg.get("use_cosine_assign", True),
         )
-        diag_dir = EXP_DIR / "glass_diag" / env_id / f"seed_{seed}"
+        diag_dir = EXP_DIR / "glass_diag" / f"{env_id}{('_' + os.environ.get('TDMPC_GLASS_OUTPUT_TAG','').strip()) if os.environ.get('TDMPC_GLASS_OUTPUT_TAG','').strip() else ''}" / f"seed_{seed}"
         diag_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Vectorised action function (pi + noise, used during data collection)
@@ -631,6 +647,7 @@ def train_tdmpc2(
     # ── Buffer (numpy, per-env ring buffer)
     buf  = MultiEnvBuffer(buf_cap, N_ENVS, obs_dim, act_dim, seq_len)
     rng_np = np.random.default_rng(seed)
+    np.random.seed(seed)
     if resume_payload and "replay_buffer" in resume_payload:
         restore_buffer_state(buf, resume_payload["replay_buffer"])
         print(f"  Restored replay buffer. Buffer={buf.total_size()}", flush=True)
@@ -718,11 +735,15 @@ def train_tdmpc2(
     eval_type_csv = None
     ckpt_dir = None
     best_mppi = resume_best_mppi
+    # Optional output-tag suffix so we can run multiple experiment phases
+    # (e.g. phase1 / phase2) against the same env_id without clobbering files.
+    _tag = os.environ.get("TDMPC_GLASS_OUTPUT_TAG", "").strip()
+    _env_dir = f"{env_id}{('_' + _tag) if _tag else ''}"
     if use_glass:
         eval_type_csv = (
             EXP_DIR.parent
             / "tdmpc_glass"
-            / env_id
+            / _env_dir
             / f"seed_{seed}.csv"
         )
         eval_type_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -739,7 +760,7 @@ def train_tdmpc2(
         ckpt_dir = (
             EXP_DIR.parent
             / "tdmpc_glass"
-            / env_id
+            / _env_dir
             / f"seed_{seed}"
             / "checkpoints"
         )
@@ -792,10 +813,10 @@ def train_tdmpc2(
         while env_steps < total_steps:
             # Collect N_ENVS steps
             if env_steps < EXPL_UNTIL:
-                acts_np = np.random.uniform(al, ah, (N_ENVS, act_dim)).astype(np.float32)
+                acts_np = rng_np.uniform(al, ah, (N_ENVS, act_dim)).astype(np.float32)
             else:
                 acts_jax = act_fn_batch(params, jnp.asarray(obs_np))
-                noise    = np.random.normal(0, EXPL_NOISE, (N_ENVS, act_dim))
+                noise    = rng_np.normal(0, EXPL_NOISE, (N_ENVS, act_dim))
                 acts_np  = np.clip(np.array(acts_jax) + noise, al, ah).astype(np.float32)
 
             env_state = batch_step(env_state, jnp.asarray(acts_np))
@@ -828,7 +849,7 @@ def train_tdmpc2(
 
             if env_steps >= next_eval:
                 ret = eval_pi(n_eps=5)
-                mppi_ret = eval_mppi(n_eps=3)
+                mppi_ret = eval_mppi(n_eps=8 if use_glass else 3)
                 elapsed = time.time() - t0
                 print(f"  step={env_steps:>9,}  pi_reward={ret:7.1f}"
                       f"  MPPI={mppi_ret:7.1f}"
@@ -889,8 +910,6 @@ def train_tdmpc2(
                             "np_random_state": np.random.get_state(),
                         }
                         save_pickle_atomic(ckpt_dir / "latest_full.pkl", full_payload)
-                        if mppi_ret >= best_mppi:
-                            save_pickle_atomic(ckpt_dir / "best_mppi_full.pkl", full_payload)
                 next_eval += eval_interval
 
     if ckpt_dir is not None:
@@ -942,6 +961,28 @@ def parse_args():
                     help="Resume TD-MPC-Glass model/optimizer state from a pickle checkpoint")
     ap.add_argument("--save_full_state", action="store_true",
                     help="Save replay buffer, vectorized env state, and RNG state for exact TD-MPC-Glass resume")
+    ap.add_argument("--glass_warmup_env_steps", type=int, default=None,
+                    help="Override TD-MPC-Glass warmup_env_steps")
+    ap.add_argument("--glass_every_k_updates", type=int, default=None,
+                    help="Override TD-MPC-Glass every_k_updates")
+    ap.add_argument("--glass_proto_temperature", type=float, default=None,
+                    help="Override TD-MPC-Glass proto_temperature")
+    ap.add_argument("--glass_assignment_temperature", type=float, default=None,
+                    help="Override TD-MPC-Glass assignment_temperature")
+    ap.add_argument("--glass_lambda_se", type=float, default=None,
+                    help="Override TD-MPC-Glass lambda_se")
+    ap.add_argument("--glass_lambda_balance", type=float, default=None,
+                    help="Override TD-MPC-Glass lambda_balance")
+    ap.add_argument("--glass_lambda_temporal", type=float, default=None,
+                    help="Override TD-MPC-Glass lambda_temporal")
+    ap.add_argument("--glass_stopgrad_graph", choices=["true", "false"], default=None,
+                    help="Override TD-MPC-Glass stopgrad_graph")
+    ap.add_argument("--glass_num_prototypes", type=int, default=None,
+                    help="Override TD-MPC-Glass num_prototypes")
+    ap.add_argument("--glass_num_clusters", type=int, default=None,
+                    help="Override TD-MPC-Glass num_clusters")
+    ap.add_argument("--glass_assign_logits_init_scale", type=float, default=None,
+                    help="Override TD-MPC-Glass assign_logits_init_scale")
     return ap.parse_args()
 
 
@@ -954,7 +995,22 @@ def main():
     print(f"Output: {EXP_DIR}\n")
 
     t_total = time.time()
+    glass_overrides = {
+        "warmup_env_steps": args.glass_warmup_env_steps,
+        "every_k_updates": args.glass_every_k_updates,
+        "proto_temperature": args.glass_proto_temperature,
+        "assignment_temperature": args.glass_assignment_temperature,
+        "lambda_se": args.glass_lambda_se,
+        "lambda_balance": args.glass_lambda_balance,
+        "lambda_temporal": args.glass_lambda_temporal,
+        "num_prototypes": args.glass_num_prototypes,
+        "num_clusters": args.glass_num_clusters,
+        "assign_logits_init_scale": args.glass_assign_logits_init_scale,
+    }
+    if args.glass_stopgrad_graph is not None:
+        glass_overrides["stopgrad_graph"] = args.glass_stopgrad_graph == "true"
 
+    failed = False
     for algo in args.algos:
         for task in args.tasks:
             csv_path = EXP_DIR / f"{algo}_{task}.csv"
@@ -974,10 +1030,12 @@ def main():
                         use_glass=True,
                         resume_checkpoint=args.resume_checkpoint,
                         save_full_state=args.save_full_state,
+                        glass_overrides=glass_overrides,
                     )
                 else:
                     print(f"Unknown algo: {algo}", flush=True)
             except Exception as e:
+                failed = True
                 print(f"\nERROR in {algo}/{task}: {e}", flush=True)
                 import traceback; traceback.print_exc()
             # Encourage GC between runs
@@ -1000,6 +1058,9 @@ def main():
             subprocess.run(cmd, check=True)
         else:
             print(f"\nNo plot script found at {plot_script}. Run manually.")
+
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -120,8 +120,8 @@ def fig_ci():
 
     ax.set_xlabel("environment steps")
     ax.set_ylabel("MPPI return (HopperHop)")
-    ax.set_title("TD-MPC-Glass: Phase 1 (5 seeds) vs Phase 1b (2 seeds, partial) "
-                 "vs Official TD-MPC2")
+    ax.set_title(f"TD-MPC-Glass: Phase 1 ({len(p1)} seeds) vs Phase 1b "
+                 f"({len(p1b)} seeds) vs Official TD-MPC2")
     ax.grid(True, alpha=0.25)
     ax.set_xlim(0, 4_000_000)
     ax.set_ylim(bottom=-10)
