@@ -53,6 +53,7 @@ echo "[phase1c] start $(date -u +%FT%TZ) seeds=[$SEEDS]" | tee -a "$LOG_DIR/queu
 echo "[phase1c] config: proto_T=0.7 init_scale=0.5 stopgrad=true act_noise=0.30->0.10/1M" \
     | tee -a "$LOG_DIR/queue.log"
 
+# ── Phase 1: train all seeds sequentially (rendering never touches the GPU here)
 for seed in $SEEDS; do
   log="$LOG_DIR/HopperHop_seed_${seed}.log"
   ckpt_dir="$REPO/exp/tdmpc_glass/HopperHop_phase1c/seed_${seed}/checkpoints"
@@ -77,11 +78,20 @@ for seed in $SEEDS; do
     echo "[phase1c] === seed=${seed} done status=${status} $(date -u +%FT%TZ) ===" \
       | tee -a "$log" | tee -a "$LOG_DIR/queue.log"
   fi
+done
 
+echo "[phase1c] all training done at $(date -u +%FT%TZ), launching renders in background" \
+  | tee -a "$LOG_DIR/queue.log"
+
+# ── Phase 2: render all seeds in parallel background jobs (CPU-bound, non-blocking)
+render_pids=()
+for seed in $SEEDS; do
+  ckpt_dir="$REPO/exp/tdmpc_glass/HopperHop_phase1c/seed_${seed}/checkpoints"
   ckpt="${ckpt_dir}/best_mppi.pkl"
   out="$VID_DIR/seed_${seed}_best_mppi.mp4"
+  log="$LOG_DIR/HopperHop_seed_${seed}.log"
   if [[ -f "$ckpt" ]]; then
-    echo "[phase1c] rendering seed=${seed} -> ${out}" | tee -a "$LOG_DIR/queue.log"
+    echo "[phase1c] rendering seed=${seed} -> ${out} (background)" | tee -a "$LOG_DIR/queue.log"
     python3 -u scripts/render_glass_rollout.py \
       --ckpt "$ckpt" \
       --env_id HopperHop \
@@ -89,11 +99,18 @@ for seed in $SEEDS; do
       --n_episodes 3 \
       --episode_length 1000 \
       --camera cam0 \
-      --seed $((100 + seed)) 2>&1 | tee -a "$log"
+      --seed $((100 + seed)) >> "$log" 2>&1 &
+    render_pids+=($!)
   else
     echo "[phase1c] no best_mppi.pkl for seed=${seed}, skipping render" \
       | tee -a "$LOG_DIR/queue.log"
   fi
 done
+
+# Wait for all renders to finish before declaring all done
+if [[ ${#render_pids[@]} -gt 0 ]]; then
+  echo "[phase1c] waiting for ${#render_pids[@]} render job(s)..." | tee -a "$LOG_DIR/queue.log"
+  for pid in "${render_pids[@]}"; do wait "$pid"; done
+fi
 
 echo "[phase1c] all done at $(date -u +%FT%TZ)" | tee -a "$LOG_DIR/queue.log"
