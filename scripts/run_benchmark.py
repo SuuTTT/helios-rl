@@ -480,6 +480,8 @@ def train_tdmpc2(
     act_noise_start: float | None = None,
     act_noise_end: float | None = None,
     act_noise_anneal_steps: int = 1_000_000,
+    mppi_horizon: int | None = None,
+    q_reset_steps: list[int] | None = None,
 ) -> None:
     """Train TD-MPC2 or TD-MPC-Glass."""
     algo_name = "TD-MPC-Glass" if use_glass else "TD-MPC2"
@@ -527,7 +529,9 @@ def train_tdmpc2(
         return _noise_start + (_noise_end - _noise_start) * frac
     if _noise_start != _noise_end:
         print(f"  act-noise anneal: {_noise_start:.3f} -> {_noise_end:.3f} over {_noise_anneal_steps:,} env-steps", flush=True)
-    H          = d["H"]            # 3
+    H          = int(mppi_horizon) if mppi_horizon is not None else d["H"]   # 3 by default
+    if mppi_horizon is not None and H != d["H"]:
+        print(f"  MPPI horizon override: H={H} (DEFAULTS['H']={d['H']})", flush=True)
     NS         = d["NS"]           # 512
     elites     = d["NUM_ELITES"]   # 64
     pi_trajs   = d["NUM_PI_TRAJS"] # 24
@@ -823,6 +827,13 @@ def train_tdmpc2(
     t0 = time.time()
     loss_val = 0.0
 
+    # Q-reset (REDQ-style): re-init online Q params + optimizer state when env_steps
+    # crosses any threshold in q_reset_steps. Target Q (tp["q"]) is preserved so the
+    # critic restarts from the EMA of past good critics rather than from scratch.
+    q_reset_pending = sorted(int(s) for s in (q_reset_steps or []))
+    if q_reset_pending:
+        print(f"  Q-reset scheduled at env_steps: {q_reset_pending}", flush=True)
+
     with open_csv(csv_path, env_id, seed) as fh:
         while env_steps < total_steps:
             # Collect N_ENVS steps
@@ -841,6 +852,20 @@ def train_tdmpc2(
             buf.add_batch(obs_np, acts_np, rews_np, done_np)
             obs_np    = new_obs
             env_steps += N_ENVS
+
+            # Q-reset check (must happen before the gradient update so the freshly
+            # initialised Q sees the next batch with a clean opt state).
+            while q_reset_pending and env_steps >= q_reset_pending[0]:
+                threshold = q_reset_pending.pop(0)
+                key, qreset_k = jax.random.split(key)
+                fresh_q = q_net.init(qreset_k, dummy_z, dummy_act)
+                params = {**params, "q": fresh_q}
+                opt = tx.init(params)  # opt state shape changes with q tree; safest to re-init
+                print(
+                    f"  [Q-reset] env_steps={env_steps:,} crossed threshold={threshold:,}"
+                    f" — online Q + opt state re-initialised (target Q preserved)",
+                    flush=True,
+                )
 
             # Gradient updates (one vectorised sample + one H2D + lax.scan)
             samp_k = buf.sample_k(K_UPDATE, BS, rng_np)
@@ -884,6 +909,7 @@ def train_tdmpc2(
                             flush=True,
                         )
                         if glass_cfg.get("diag_dump_matrices", True):
+                            diag_dir.mkdir(parents=True, exist_ok=True)
                             np.savez_compressed(
                                 diag_dir / f"step_{env_steps}.npz",
                                 P=np.asarray(gd["P"]),
@@ -1004,6 +1030,11 @@ def parse_args():
                     help="Final exploration-noise std after annealing (default: same as --act_noise_start, i.e. no anneal)")
     ap.add_argument("--act_noise_anneal_steps", type=int, default=1_000_000,
                     help="Env-steps over which to linearly anneal noise from start to end (default: 1M)")
+    ap.add_argument("--mppi_horizon", type=int, default=None,
+                    help="Override MPPI horizon H (and training seq_len=H+1). Default: DEFAULTS['H']=3")
+    ap.add_argument("--q_reset_steps", type=str, default=None,
+                    help="Comma-separated env-step thresholds at which to re-init online Q + optimizer (REDQ-style). "
+                         "Target Q (tp['q']) and other params are preserved. Example: '1000000,2000000,3000000'.")
     return ap.parse_args()
 
 
@@ -1043,6 +1074,9 @@ def main():
                 elif algo == "tdmpc2":
                     train_tdmpc2(task, args.total_steps, args.seed, csv_path)
                 elif algo in ("tdmpc-glass", "tdmpc_glass"):
+                    q_reset = None
+                    if args.q_reset_steps:
+                        q_reset = sorted({int(s.strip()) for s in args.q_reset_steps.split(",") if s.strip()})
                     train_tdmpc2(
                         task,
                         args.total_steps,
@@ -1055,6 +1089,8 @@ def main():
                         act_noise_start=args.act_noise_start,
                         act_noise_end=args.act_noise_end,
                         act_noise_anneal_steps=args.act_noise_anneal_steps,
+                        mppi_horizon=args.mppi_horizon,
+                        q_reset_steps=q_reset,
                     )
                 else:
                     print(f"Unknown algo: {algo}", flush=True)
