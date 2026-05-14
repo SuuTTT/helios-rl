@@ -36,13 +36,14 @@ export MUJOCO_GL=${MUJOCO_GL:-egl}
 LOG_DIR=$REPO/exp/tdmpc_glass/logs/phasef
 mkdir -p "$LOG_DIR"
 
-TOTAL_STEPS=${TOTAL_STEPS:-4000000}
+TOTAL_STEPS=${TOTAL_STEPS:-10000000}
 SEEDS=${SEEDS:-"1 2 3 4 5"}
 SMOOTH=${SMOOTH:-0.001}
+PATIENCE=${PATIENCE:-1500000}
 
-echo "[phasef] start $(date -u +%FT%TZ) seeds=[$SEEDS] total_steps=$TOTAL_STEPS smooth=$SMOOTH" \
+echo "[phasef] start $(date -u +%FT%TZ) seeds=[$SEEDS] total_steps=$TOTAL_STEPS smooth=$SMOOTH patience=$PATIENCE" \
     | tee -a "$LOG_DIR/queue.log"
-echo "[phasef] config: Phase 1b knobs + latent_action_smooth_coef=$SMOOTH (H=3 default)" \
+echo "[phasef] config: Phase 1b knobs + latent_action_smooth_coef=$SMOOTH (H=3 default), 10M cap + 1.5M early-stop" \
     | tee -a "$LOG_DIR/queue.log"
 
 for seed in $SEEDS; do
@@ -62,6 +63,7 @@ for seed in $SEEDS; do
       --glass_assign_logits_init_scale 0.5 \
       --glass_stopgrad_graph true \
       --latent_action_smooth_coef "$SMOOTH" \
+      --early_stop_patience "$PATIENCE" \
       --no_plot 2>&1 | tee -a "$log"
     status=${PIPESTATUS[0]}
     echo "[phasef] === seed=${seed} done status=${status} $(date -u +%FT%TZ) ===" \

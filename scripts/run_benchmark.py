@@ -484,6 +484,7 @@ def train_tdmpc2(
     q_reset_steps: list[int] | None = None,
     latent_action_smooth_coef: float = 0.0,
     consistency_coef: float | None = None,
+    early_stop_patience: int = 0,
 ) -> None:
     """Train TD-MPC2 or TD-MPC-Glass."""
     algo_name = "TD-MPC-Glass" if use_glass else "TD-MPC2"
@@ -761,6 +762,11 @@ def train_tdmpc2(
     eval_type_csv = None
     ckpt_dir = None
     best_mppi = resume_best_mppi
+    best_mppi_step = 0
+    early_stop_triggered = False
+    _patience = max(int(early_stop_patience), 0)
+    if _patience > 0:
+        print(f"  Early-stop: will halt after {_patience:,} env-steps with no new best MPPI", flush=True)
     # Optional output-tag suffix so we can run multiple experiment phases
     # (e.g. phase1 / phase2) against the same env_id without clobbering files.
     _tag = os.environ.get("TDMPC_GLASS_OUTPUT_TAG", "").strip()
@@ -948,6 +954,7 @@ def train_tdmpc2(
                     save_pickle_atomic(ckpt_dir / "latest_eval.pkl", ckpt_payload)
                     if mppi_ret > best_mppi:
                         best_mppi = mppi_ret
+                        best_mppi_step = env_steps
                         save_pickle_atomic(ckpt_dir / "best_mppi.pkl", ckpt_payload)
                     if save_full_state:
                         full_payload = {
@@ -960,6 +967,21 @@ def train_tdmpc2(
                         }
                         save_pickle_atomic(ckpt_dir / "latest_full.pkl", full_payload)
                 next_eval += eval_interval
+
+                # Early stop: halt if no new best MPPI in the last `_patience` env-steps.
+                if _patience > 0 and best_mppi_step > 0 and (env_steps - best_mppi_step) >= _patience:
+                    print(
+                        f"  Early-stop fired at env_steps={env_steps:,}: "
+                        f"no new best MPPI since step={best_mppi_step:,} "
+                        f"(best={best_mppi:.1f}, patience={_patience:,} env-steps).",
+                        flush=True,
+                    )
+                    early_stop_triggered = True
+                    break
+
+        # Outer while-loop also exits if early-stop fired during the eval block above.
+        if early_stop_triggered:
+            pass  # fall through to checkpoint code below
 
     if ckpt_dir is not None:
         final_payload = {
@@ -1049,6 +1071,9 @@ def parse_args():
     ap.add_argument("--consistency_coef", type=float, default=None,
                     help="Override TD-MPC consistency-loss weight (Phase-g). Default: 2.0 (v13 stable). Try 1.0 to "
                          "let the model focus on TD instead of dynamics regularisation.")
+    ap.add_argument("--early_stop_patience", type=int, default=0,
+                    help="If > 0, halt training when no new best MPPI has been recorded in the last N env-steps. "
+                         "Combine with a generous --total_steps cap (e.g. 10_000_000) to auto-stop on convergence.")
     return ap.parse_args()
 
 
@@ -1107,6 +1132,7 @@ def main():
                         q_reset_steps=q_reset,
                         latent_action_smooth_coef=args.latent_action_smooth_coef,
                         consistency_coef=args.consistency_coef,
+                        early_stop_patience=args.early_stop_patience,
                     )
                 else:
                     print(f"Unknown algo: {algo}", flush=True)
