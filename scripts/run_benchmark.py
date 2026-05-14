@@ -482,6 +482,8 @@ def train_tdmpc2(
     act_noise_anneal_steps: int = 1_000_000,
     mppi_horizon: int | None = None,
     q_reset_steps: list[int] | None = None,
+    latent_action_smooth_coef: float = 0.0,
+    consistency_coef: float | None = None,
 ) -> None:
     """Train TD-MPC2 or TD-MPC-Glass."""
     algo_name = "TD-MPC-Glass" if use_glass else "TD-MPC2"
@@ -614,6 +616,10 @@ def train_tdmpc2(
         )
 
     # ── Library update functions
+    _consistency_coef = float(consistency_coef) if consistency_coef is not None else float(d.get("consistency_coef", 2.0))
+    _smooth_coef = float(latent_action_smooth_coef)
+    if _smooth_coef > 0 or _consistency_coef != 2.0:
+        print(f"  loss-coef overrides: consistency={_consistency_coef} latent_action_smooth={_smooth_coef}", flush=True)
     if use_glass:
         _, multi_step = make_update_fn(
             enc_net, dyn_net, rew_net, q_net, pi_net, tx,
@@ -627,6 +633,8 @@ def train_tdmpc2(
             glass_lambda_temporal=glass_cfg.get("lambda_temporal", 1.0e-3),
             glass_stopgrad_graph=glass_cfg.get("stopgrad_graph", True),
             glass_use_cosine_assign=glass_cfg.get("use_cosine_assign", True),
+            latent_action_smooth_coef=_smooth_coef,
+            consistency_coef=_consistency_coef,
         )
     else:
         _, multi_step = make_update_fn(
@@ -1035,6 +1043,12 @@ def parse_args():
     ap.add_argument("--q_reset_steps", type=str, default=None,
                     help="Comma-separated env-step thresholds at which to re-init online Q + optimizer (REDQ-style). "
                          "Target Q (tp['q']) and other params are preserved. Example: '1000000,2000000,3000000'.")
+    ap.add_argument("--latent_action_smooth_coef", type=float, default=0.0,
+                    help="Latent action smoothing weight (Phase-f). Penalises ||pi(z_t)-pi(z_{t-1})||^2 in the policy "
+                         "loss, computed over the dynamics rollout. 0 = off (default). Try 1e-3 for HopperHop.")
+    ap.add_argument("--consistency_coef", type=float, default=None,
+                    help="Override TD-MPC consistency-loss weight (Phase-g). Default: 2.0 (v13 stable). Try 1.0 to "
+                         "let the model focus on TD instead of dynamics regularisation.")
     return ap.parse_args()
 
 
@@ -1091,6 +1105,8 @@ def main():
                         act_noise_anneal_steps=args.act_noise_anneal_steps,
                         mppi_horizon=args.mppi_horizon,
                         q_reset_steps=q_reset,
+                        latent_action_smooth_coef=args.latent_action_smooth_coef,
+                        consistency_coef=args.consistency_coef,
                     )
                 else:
                     print(f"Unknown algo: {algo}", flush=True)

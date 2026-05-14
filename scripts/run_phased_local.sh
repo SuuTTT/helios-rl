@@ -10,8 +10,9 @@
 #   --glass_assign_logits_init_scale 0.5      (same)
 #   --glass_stopgrad_graph           true     (same)
 #   --mppi_horizon                   5        ↑ from 3 — wider planning reach
-#   --act_noise_start                0.40     ↑ from 0.30 — wider exploration
-#   --act_noise_end                  0.40     constant, no anneal
+#   (noise stays at Phase 1b default 0.30 — see phased_v1_noise040: 0.40
+#    caused mjx Warp graph-capture error 901 at ~1M env steps when hopper
+#    drifted into non-converging solver states; H=5 isolated from noise)
 #
 # Outputs (TDMPC_GLASS_OUTPUT_TAG=phased):
 #   CSV  -> exp/tdmpc_glass/HopperHop_phased/seed_*.csv
@@ -50,7 +51,7 @@ SEEDS=${SEEDS:-"1 2 3 4 5"}
 
 echo "[phased] start $(date -u +%FT%TZ) seeds=[$SEEDS] total_steps=$TOTAL_STEPS" \
     | tee -a "$LOG_DIR/queue.log"
-echo "[phased] config: proto_T=0.7 init_scale=0.5 stopgrad=true H=5 expl_noise=0.40_constant" \
+echo "[phased] config: proto_T=0.7 init_scale=0.5 stopgrad=true H=5 expl_noise=0.30_default (was 0.40 in v1, hit mjx-warp-901)" \
     | tee -a "$LOG_DIR/queue.log"
 
 for seed in $SEEDS; do
@@ -70,8 +71,6 @@ for seed in $SEEDS; do
       --glass_assign_logits_init_scale 0.5 \
       --glass_stopgrad_graph true \
       --mppi_horizon 5 \
-      --act_noise_start 0.40 \
-      --act_noise_end 0.40 \
       --no_plot 2>&1 | tee -a "$log"
     status=${PIPESTATUS[0]}
     echo "[phased] === seed=${seed} done status=${status} $(date -u +%FT%TZ) ===" \

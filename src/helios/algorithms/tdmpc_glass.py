@@ -559,6 +559,8 @@ def make_update_fn(
     glass_lambda_temporal: float = 1.0e-3,
     glass_stopgrad_graph: bool = False,
     glass_use_cosine_assign: bool = True,
+    latent_action_smooth_coef: float = 0.0,
+    consistency_coef: float = 2.0,
 ) -> tuple:
     """Build (single_step, multi_step) JIT-compiled update functions.
 
@@ -658,7 +660,18 @@ def make_update_fn(
             (weights, z_t_T, a_T, r_T, d_T, z_t1_T, zs_t1_T),
         )
         n = T - 1
-        tdmpc_total = (2 * jnp.sum(cls) + 2 * jnp.sum(rls) + jnp.sum(vls) + 0.1 * jnp.sum(pls)) / n
+        tdmpc_total = (consistency_coef * jnp.sum(cls) + 2 * jnp.sum(rls) + jnp.sum(vls) + 0.1 * jnp.sum(pls)) / n
+
+        # Latent action smoothing (Phase-f): penalise the policy's predicted
+        # action drifting across consecutive latent rollout steps. Helps on
+        # underactuated DMC tasks like Hopper (blog §9 item 10).
+        # z_t_T has shape (T-1, B, latent_dim) — apply pi to each step.
+        def _pi_mean_at_z(z_step):
+            m, _ = pi_net.apply(params["pi"], jax.lax.stop_gradient(z_step))
+            return jnp.tanh(m)
+        all_pi_mean = jax.vmap(_pi_mean_at_z)(z_t_T)  # (T-1, B, act_dim)
+        smooth_loss = jnp.mean(jnp.sum((all_pi_mean[1:] - all_pi_mean[:-1]) ** 2, axis=-1))
+        tdmpc_total = tdmpc_total + latent_action_smooth_coef * smooth_loss
 
         zero_glass_aux = {
             "glass_se": jnp.array(0.0),
