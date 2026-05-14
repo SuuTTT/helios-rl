@@ -345,6 +345,8 @@ def make_update_fn(
     rew_scale: float = 10.0,
     scale_min: float = 1.0,
     scale_max: float = 4.0,
+    latent_action_smooth_coef: float = 0.0,
+    consistency_coef: float = 2.0,
 ) -> tuple:
     """Build (single_step, multi_step) JIT-compiled update functions.
 
@@ -441,7 +443,17 @@ def make_update_fn(
             (weights, z_t_T, a_T, r_T, d_T, z_t1_T, zs_t1_T),
         )
         n = T - 1
-        total = (2 * jnp.sum(cls) + 2 * jnp.sum(rls) + jnp.sum(vls) + 0.1 * jnp.sum(pls)) / n
+        total = (consistency_coef * jnp.sum(cls) + 2 * jnp.sum(rls) + jnp.sum(vls) + 0.1 * jnp.sum(pls)) / n
+
+        # Latent action smoothing (ported from tdmpc_glass.py — Phase-f's win).
+        # Penalise drift of the policy's predicted action across the dynamics
+        # rollout. 0 by default → matches old behaviour.
+        def _pi_mean_at_z(z_step):
+            m, _ = pi_net.apply(params["pi"], jax.lax.stop_gradient(z_step))
+            return jnp.tanh(m)
+        all_pi_mean = jax.vmap(_pi_mean_at_z)(z_t_T)  # (T-1, B, act_dim)
+        smooth_loss = jnp.mean(jnp.sum((all_pi_mean[1:] - all_pi_mean[:-1]) ** 2, axis=-1))
+        total = total + latent_action_smooth_coef * smooth_loss
         aux = {
             "c": jnp.sum(cls) / n,
             "r": jnp.sum(rls) / n,

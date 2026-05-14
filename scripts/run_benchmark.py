@@ -485,6 +485,7 @@ def train_tdmpc2(
     latent_action_smooth_coef: float = 0.0,
     consistency_coef: float | None = None,
     early_stop_patience: int = 0,
+    latent_smooth_warmup_env_steps: int = 0,
 ) -> None:
     """Train TD-MPC2 or TD-MPC-Glass."""
     algo_name = "TD-MPC-Glass" if use_glass else "TD-MPC2"
@@ -618,30 +619,44 @@ def train_tdmpc2(
 
     # ── Library update functions
     _consistency_coef = float(consistency_coef) if consistency_coef is not None else float(d.get("consistency_coef", 2.0))
-    _smooth_coef = float(latent_action_smooth_coef)
-    if _smooth_coef > 0 or _consistency_coef != 2.0:
-        print(f"  loss-coef overrides: consistency={_consistency_coef} latent_action_smooth={_smooth_coef}", flush=True)
-    if use_glass:
-        _, multi_step = make_update_fn(
-            enc_net, dyn_net, rew_net, q_net, pi_net, tx,
-            gamma=gamma, rho=rho, tau=tau, rew_scale=rew_scale,
-            glass_enabled=glass_cfg.get("enabled", True),
-            glass_every_k_updates=glass_cfg.get("every_k_updates", 4),
-            glass_proto_temperature=glass_cfg.get("proto_temperature", 1.0),
-            glass_assignment_temperature=glass_cfg.get("assignment_temperature", 1.0),
-            glass_lambda_se=glass_cfg.get("lambda_se", 5.0e-3),
-            glass_lambda_balance=glass_cfg.get("lambda_balance", 1.0e-2),
-            glass_lambda_temporal=glass_cfg.get("lambda_temporal", 1.0e-3),
-            glass_stopgrad_graph=glass_cfg.get("stopgrad_graph", True),
-            glass_use_cosine_assign=glass_cfg.get("use_cosine_assign", True),
-            latent_action_smooth_coef=_smooth_coef,
-            consistency_coef=_consistency_coef,
-        )
-    else:
-        _, multi_step = make_update_fn(
-            enc_net, dyn_net, rew_net, q_net, pi_net, tx,
-            gamma=gamma, rho=rho, tau=tau, rew_scale=rew_scale,
-        )
+    _smooth_target = float(latent_action_smooth_coef)
+    _smooth_warmup = int(latent_smooth_warmup_env_steps)
+    _curriculum_active = _smooth_warmup > 0 and _smooth_target > 0
+    _smooth_curr = 0.0 if _curriculum_active else _smooth_target
+    if _smooth_target > 0 or _consistency_coef != 2.0:
+        if _curriculum_active:
+            print(f"  loss-coef: consistency={_consistency_coef} latent_action_smooth={_smooth_target} CURRICULUM "
+                  f"(0 until {_smooth_warmup:,} env-steps, then ramp to target)", flush=True)
+        else:
+            print(f"  loss-coef overrides: consistency={_consistency_coef} latent_action_smooth={_smooth_target}", flush=True)
+
+    def _build_multi_step(smooth_coef: float):
+        if use_glass:
+            _, ms = make_update_fn(
+                enc_net, dyn_net, rew_net, q_net, pi_net, tx,
+                gamma=gamma, rho=rho, tau=tau, rew_scale=rew_scale,
+                glass_enabled=glass_cfg.get("enabled", True),
+                glass_every_k_updates=glass_cfg.get("every_k_updates", 4),
+                glass_proto_temperature=glass_cfg.get("proto_temperature", 1.0),
+                glass_assignment_temperature=glass_cfg.get("assignment_temperature", 1.0),
+                glass_lambda_se=glass_cfg.get("lambda_se", 5.0e-3),
+                glass_lambda_balance=glass_cfg.get("lambda_balance", 1.0e-2),
+                glass_lambda_temporal=glass_cfg.get("lambda_temporal", 1.0e-3),
+                glass_stopgrad_graph=glass_cfg.get("stopgrad_graph", True),
+                glass_use_cosine_assign=glass_cfg.get("use_cosine_assign", True),
+                latent_action_smooth_coef=smooth_coef,
+                consistency_coef=_consistency_coef,
+            )
+        else:
+            _, ms = make_update_fn(
+                enc_net, dyn_net, rew_net, q_net, pi_net, tx,
+                gamma=gamma, rho=rho, tau=tau, rew_scale=rew_scale,
+                latent_action_smooth_coef=smooth_coef,
+                consistency_coef=_consistency_coef,
+            )
+        return ms
+
+    multi_step = _build_multi_step(_smooth_curr)
 
     # ── MPPI planner (for eval)
     plan = make_mppi_fn(
@@ -867,6 +882,17 @@ def train_tdmpc2(
             obs_np    = new_obs
             env_steps += N_ENVS
 
+            # Curriculum smoothing: turn on smoothing at the warmup boundary.
+            # Rebuilds multi_step with the new coef (one-time ~3 min JIT recompile).
+            if _curriculum_active and env_steps >= _smooth_warmup and _smooth_curr != _smooth_target:
+                print(
+                    f"  [curriculum] env_steps={env_steps:,} crossed warmup={_smooth_warmup:,} — "
+                    f"raising latent_action_smooth_coef {_smooth_curr} -> {_smooth_target} "
+                    f"(JIT recompile cost ~3 min)", flush=True
+                )
+                _smooth_curr = _smooth_target
+                multi_step = _build_multi_step(_smooth_curr)
+
             # Q-reset check (must happen before the gradient update so the freshly
             # initialised Q sees the next batch with a clean opt state).
             while q_reset_pending and env_steps >= q_reset_pending[0]:
@@ -1074,6 +1100,10 @@ def parse_args():
     ap.add_argument("--early_stop_patience", type=int, default=0,
                     help="If > 0, halt training when no new best MPPI has been recorded in the last N env-steps. "
                          "Combine with a generous --total_steps cap (e.g. 10_000_000) to auto-stop on convergence.")
+    ap.add_argument("--latent_smooth_warmup_env_steps", type=int, default=0,
+                    help="Curriculum schedule for --latent_action_smooth_coef. While env_steps < N, smoothing "
+                         "coef is forced to 0 (lets Glass basin lock undisturbed). At env_steps >= N, coef is "
+                         "raised to --latent_action_smooth_coef and the JIT is rebuilt (~3 min compile cost, once).")
     return ap.parse_args()
 
 
@@ -1111,7 +1141,19 @@ def main():
                 elif algo == "sac":
                     train_sac(task, args.total_steps, args.seed, csv_path)
                 elif algo == "tdmpc2":
-                    train_tdmpc2(task, args.total_steps, args.seed, csv_path)
+                    # tdmpc2 path (no Glass). Supports --latent_action_smooth_coef,
+                    # --consistency_coef, --early_stop_patience — same flags as
+                    # tdmpc-glass for direct ablation comparison.
+                    train_tdmpc2(
+                        task,
+                        args.total_steps,
+                        args.seed,
+                        csv_path,
+                        use_glass=False,
+                        latent_action_smooth_coef=args.latent_action_smooth_coef,
+                        consistency_coef=args.consistency_coef,
+                        early_stop_patience=args.early_stop_patience,
+                    )
                 elif algo in ("tdmpc-glass", "tdmpc_glass"):
                     q_reset = None
                     if args.q_reset_steps:
@@ -1133,6 +1175,7 @@ def main():
                         latent_action_smooth_coef=args.latent_action_smooth_coef,
                         consistency_coef=args.consistency_coef,
                         early_stop_patience=args.early_stop_patience,
+                        latent_smooth_warmup_env_steps=args.latent_smooth_warmup_env_steps,
                     )
                 else:
                     print(f"Unknown algo: {algo}", flush=True)
