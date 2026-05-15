@@ -486,6 +486,7 @@ def train_tdmpc2(
     consistency_coef: float | None = None,
     early_stop_patience: int = 0,
     latent_smooth_warmup_env_steps: int = 0,
+    glass_decay_steps: int = 0,
 ) -> None:
     """Train TD-MPC2 or TD-MPC-Glass."""
     algo_name = "TD-MPC-Glass" if use_glass else "TD-MPC2"
@@ -631,6 +632,11 @@ def train_tdmpc2(
             print(f"  loss-coef overrides: consistency={_consistency_coef} latent_action_smooth={_smooth_target}", flush=True)
 
     def _build_multi_step(smooth_coef: float):
+        # smoothing_enabled controls whether the vmap-over-pi smoothing forward
+        # pass is in the JIT graph at all. When False, the compiled graph
+        # matches the pre-smoothing (Phase 1b) version exactly — basin choice
+        # is then unperturbed (Phase-m fix for K=3-flip on seeds 4, 5).
+        smoothing_enabled = smooth_coef > 0
         if use_glass:
             _, ms = make_update_fn(
                 enc_net, dyn_net, rew_net, q_net, pi_net, tx,
@@ -646,6 +652,7 @@ def train_tdmpc2(
                 glass_use_cosine_assign=glass_cfg.get("use_cosine_assign", True),
                 latent_action_smooth_coef=smooth_coef,
                 consistency_coef=_consistency_coef,
+                smoothing_enabled=smoothing_enabled,
             )
         else:
             _, ms = make_update_fn(
@@ -653,6 +660,7 @@ def train_tdmpc2(
                 gamma=gamma, rho=rho, tau=tau, rew_scale=rew_scale,
                 latent_action_smooth_coef=smooth_coef,
                 consistency_coef=_consistency_coef,
+                smoothing_enabled=smoothing_enabled,
             )
         return ms
 
@@ -912,7 +920,10 @@ def train_tdmpc2(
             if samp_k is not None:
                 ob_k, ab_k, rb_k, db_k = [jnp.asarray(x) for x in samp_k]
                 if use_glass:
-                    glass_active = env_steps >= glass_cfg.get("warmup_env_steps", 100_000)
+                    _glass_warmup = glass_cfg.get("warmup_env_steps", 100_000)
+                    _glass_decay = int(glass_decay_steps) if glass_decay_steps > 0 else None
+                    # glass active in window [warmup, decay): turn ON after warmup, OFF after decay if set
+                    glass_active = (env_steps >= _glass_warmup) and (_glass_decay is None or env_steps < _glass_decay)
                     params, tp, opt, key, scale, glass_step, loss_val, aux = multi_step(
                         params, tp, opt, ob_k, ab_k, rb_k, db_k, key, scale,
                         glass_step, glass_active,
@@ -1104,6 +1115,10 @@ def parse_args():
                     help="Curriculum schedule for --latent_action_smooth_coef. While env_steps < N, smoothing "
                          "coef is forced to 0 (lets Glass basin lock undisturbed). At env_steps >= N, coef is "
                          "raised to --latent_action_smooth_coef and the JIT is rebuilt (~3 min compile cost, once).")
+    ap.add_argument("--glass_decay_steps", type=int, default=0,
+                    help="If > 0, turn Glass loss OFF after env_steps >= N (hybrid Phase-o). Glass active "
+                         "during the basin-discovery + representation-learning window [warmup, N], then OFF "
+                         "so encoder/dynamics can refine without the partition acting as inductive bias.")
     return ap.parse_args()
 
 
@@ -1131,10 +1146,15 @@ def main():
     if args.glass_stopgrad_graph is not None:
         glass_overrides["stopgrad_graph"] = args.glass_stopgrad_graph == "true"
 
+    # Per-phase benchmark CSV: include TDMPC_GLASS_OUTPUT_TAG in the filename so
+    # rows from different phases (phase-f, phase-j, etc.) end up in separate
+    # files instead of all interleaving into one rollup.
+    _tag = os.environ.get("TDMPC_GLASS_OUTPUT_TAG", "").strip()
+    _suffix = f"_{_tag}" if _tag else ""
     failed = False
     for algo in args.algos:
         for task in args.tasks:
-            csv_path = EXP_DIR / f"{algo}_{task}.csv"
+            csv_path = EXP_DIR / f"{algo}_{task}{_suffix}.csv"
             try:
                 if algo == "ppo":
                     train_ppo(task, args.total_steps, args.seed, csv_path)
@@ -1176,6 +1196,7 @@ def main():
                         consistency_coef=args.consistency_coef,
                         early_stop_patience=args.early_stop_patience,
                         latent_smooth_warmup_env_steps=args.latent_smooth_warmup_env_steps,
+                        glass_decay_steps=args.glass_decay_steps,
                     )
                 else:
                     print(f"Unknown algo: {algo}", flush=True)

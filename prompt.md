@@ -18,3 +18,6 @@
 
 ---
 - One potential concern about our approach is that final performance may be lower than original td mpc because abstract states might be helpful to learn quickly in the beginning but that could be a blocker later (it may not completely solve the task due to abstractions). Hybrid approach (using both abstraction and raw latent space) may be a good alternative to consider. But let's see
+
+# lesson of using agent
+waching and understanding video is critical

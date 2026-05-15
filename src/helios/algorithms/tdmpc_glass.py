@@ -561,6 +561,7 @@ def make_update_fn(
     glass_use_cosine_assign: bool = True,
     latent_action_smooth_coef: float = 0.0,
     consistency_coef: float = 2.0,
+    smoothing_enabled: bool = True,
 ) -> tuple:
     """Build (single_step, multi_step) JIT-compiled update functions.
 
@@ -662,16 +663,17 @@ def make_update_fn(
         n = T - 1
         tdmpc_total = (consistency_coef * jnp.sum(cls) + 2 * jnp.sum(rls) + jnp.sum(vls) + 0.1 * jnp.sum(pls)) / n
 
-        # Latent action smoothing (Phase-f): penalise the policy's predicted
-        # action drifting across consecutive latent rollout steps. Helps on
-        # underactuated DMC tasks like Hopper (blog §9 item 10).
-        # z_t_T has shape (T-1, B, latent_dim) — apply pi to each step.
-        def _pi_mean_at_z(z_step):
-            m, _ = pi_net.apply(params["pi"], jax.lax.stop_gradient(z_step))
-            return jnp.tanh(m)
-        all_pi_mean = jax.vmap(_pi_mean_at_z)(z_t_T)  # (T-1, B, act_dim)
-        smooth_loss = jnp.mean(jnp.sum((all_pi_mean[1:] - all_pi_mean[:-1]) ** 2, axis=-1))
-        tdmpc_total = tdmpc_total + latent_action_smooth_coef * smooth_loss
+        # Latent action smoothing (Phase-f). Python-conditional so the
+        # graph EXACTLY matches the pre-smoothing version when disabled —
+        # otherwise the vmap forward pass perturbs XLA float order enough
+        # to flip basin-fragile seeds into K=3 (Phase-m fix).
+        if smoothing_enabled:
+            def _pi_mean_at_z(z_step):
+                m, _ = pi_net.apply(params["pi"], jax.lax.stop_gradient(z_step))
+                return jnp.tanh(m)
+            all_pi_mean = jax.vmap(_pi_mean_at_z)(z_t_T)  # (T-1, B, act_dim)
+            smooth_loss = jnp.mean(jnp.sum((all_pi_mean[1:] - all_pi_mean[:-1]) ** 2, axis=-1))
+            tdmpc_total = tdmpc_total + latent_action_smooth_coef * smooth_loss
 
         zero_glass_aux = {
             "glass_se": jnp.array(0.0),
