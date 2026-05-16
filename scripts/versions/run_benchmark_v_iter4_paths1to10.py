@@ -488,8 +488,6 @@ def train_tdmpc2(
     latent_smooth_warmup_env_steps: int = 0,
     glass_decay_steps: int = 0,
     expl_until: int | None = None,
-    knee_penalty_coef: float = 0.0,
-    knee_penalty_threshold: float = 0.15,
 ) -> None:
     """Train TD-MPC2 or TD-MPC-Glass."""
     algo_name = "TD-MPC-Glass" if use_glass else "TD-MPC2"
@@ -719,22 +717,6 @@ def train_tdmpc2(
     def batch_step(state, acts):
         return env.step(state, acts)
 
-    # Path 5 / Phase-t — knee penalty fn. Computes per-env penalty based on
-    # how far below threshold any non-foot geom z drops. Geom IDs (HopperHop):
-    # 0=floor, 1=torso, 2=nose, 3=pelvis, 4=thigh, 5=calf, 6=foot.
-    # Penalty target: sum over geoms 1..5 of max(0, threshold - z).
-    # Returns shape (N_ENVS,) — subtracted from training reward only.
-    _knee_pen_thr = float(knee_penalty_threshold)
-    _knee_pen_coef = float(knee_penalty_coef)
-    @jax.jit
-    def knee_penalty_fn(state):
-        # state.data.geom_xpos shape: (batch, num_geoms, 3)
-        non_foot_z = state.data.geom_xpos[..., 1:6, 2]  # (batch, 5)
-        per_geom = jnp.maximum(_knee_pen_thr - non_foot_z, 0.0)
-        return jnp.sum(per_geom, axis=-1)  # (batch,)
-    if _knee_pen_coef > 0:
-        print(f"  Knee penalty active: coef={_knee_pen_coef} threshold={_knee_pen_thr}", flush=True)
-
     key, ek2 = jax.random.split(key)
     if resume_payload and "env_state" in resume_payload and "obs_np" in resume_payload:
         env_state = resume_payload["env_state"]
@@ -910,11 +892,6 @@ def train_tdmpc2(
             new_obs  = np.array(env_state.obs)
             rews_np  = np.array(env_state.reward)
             done_np  = np.array(env_state.done > 0.5, np.float32)
-            # Path 5 / Phase-t — knee penalty (training reward only). Eval
-            # reward is unmodified so we measure against the original task.
-            if _knee_pen_coef > 0:
-                pen_np = np.array(knee_penalty_fn(env_state))
-                rews_np = rews_np - _knee_pen_coef * pen_np
             buf.add_batch(obs_np, acts_np, rews_np, done_np)
             obs_np    = new_obs
             env_steps += N_ENVS
@@ -1161,13 +1138,6 @@ def parse_args():
                          "is on. Has no effect if --glass_num_super_clusters is 0.")
     ap.add_argument("--glass_lambda_super_balance", type=float, default=None,
                     help="Weight on the super-cluster balance hinge loss. Try 1e-2 (same as λ_balance).")
-    # Path 5 / Phase-t — reward shaping: penalise knee/torso/thigh contact with floor.
-    ap.add_argument("--knee_penalty_coef", type=float, default=0.0,
-                    help="Per-step training-only reward penalty when non-foot geoms (torso, nose, pelvis, "
-                         "thigh, calf) are within penalty_threshold of the floor. Forces foot-hop technique. "
-                         "Eval reward is unmodified. Try 0.1 for HopperHop.")
-    ap.add_argument("--knee_penalty_threshold", type=float, default=0.15,
-                    help="Z-coordinate threshold (m) below which non-foot geoms incur penalty. Default 0.15.")
     return ap.parse_args()
 
 
@@ -1250,8 +1220,6 @@ def main():
                         latent_smooth_warmup_env_steps=args.latent_smooth_warmup_env_steps,
                         glass_decay_steps=args.glass_decay_steps,
                         expl_until=args.expl_until,
-                        knee_penalty_coef=args.knee_penalty_coef,
-                        knee_penalty_threshold=args.knee_penalty_threshold,
                     )
                 else:
                     print(f"Unknown algo: {algo}", flush=True)

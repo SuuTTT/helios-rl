@@ -360,3 +360,188 @@ falsified.
 
 If Phase-o still caps under ~450 average, the Glass-as-blocker hypothesis
 is falsified and we go to Phase-p/r.
+
+---
+
+## 10. Phase-o result — mixed (1 surprise win, 1 stuck, 1 crash, 1 plateau)
+
+**Update 2026-05-15 evening**: an initial read of Phase-o seed 4 plateauing
+at 254 led me to declare Phase-o a failure. **I missed that Phase-o seed 3
+actually broke 500** — peak MPPI=523.9 at 4M, still running on local. This
+is the **3rd winner across all 7 phases**.
+
+Updated Phase-o scorecard:
+
+| seed | basin | peak MPPI | comment |
+|------|:-----:|----------:|---------|
+| Phase-o seed 3 (local) | K=4 | **523.9 ✅** | surged @ 750k→1M (490), peak 524 @ 4M, still running |
+| Phase-o seed 4 (local) | K=4 | 254 | typical knee-walk stuck |
+| Phase-o seed 5 (local) | — | crash | Warp-901 @ ~500k env_steps |
+| Phase-o seed 1 (remote) | K=4 | 391 | partial improvement over Phase-m |
+
+### 10.x The pattern across ALL 3 winners — the 1M surge
+
+All three seeds that cleared MPPI=500 across our 20+ seed sweep share **the
+exact same trajectory shape**:
+
+| seed | first crossed 400 | peak | peak step |
+|------|:-----------------:|-----:|----------:|
+| Phase-f seed 1 | **1M (417)** | 571 | 3M |
+| Phase-j seed 2 | **1M (435)** | 518 | 1.75M |
+| Phase-o seed 3 | **1M (490)** | 524 | 4M (still climbing) |
+
+**All three surged at the 1M env-step eval — the same boundary.** No winning
+seed had its surge at 750k or 1.25M; they all crossed 400 at exactly the 1M
+checkpoint. After 1M, all three held 400+ for the rest of training.
+
+Stuck seeds NEVER cross 400 — they linearly creep from 0 to 200-400 over
+many million env steps. The 1M eval is a clean discriminator: at 1M either
+you're at >400 (and will sustain), or you're below 200 (and will plateau).
+
+### 10.x The mechanism — surge is RNG-determined; Phase-o's hybrid logic
+is INCIDENTAL to seed 3's win
+
+Phase-o seed 3 surged at 1M, but **Glass turn-off didn't happen until 2M**.
+The win occurred while Glass was still active and following the curriculum
+smoothing schedule. So Phase-o's hybrid abstraction logic was IRRELEVANT to
+this seed's success — the surge had already happened before glass_decay_steps
+fired.
+
+What made seed 3 succeed in Phase-o but fail in Phase-j (peak 322)? **The
+mere presence of the `glass_decay_steps` flag in the code path perturbed
+XLA's float order**, giving seed 3 a different RNG trajectory than it had
+in Phase-j. That different trajectory happened to find the foot-hop technique
+early. Same code + same seed produces different results when *any* loss-fn
+or training-loop knob is added, even if the knob doesn't fire.
+
+### 10.x Verdict on the abstraction-as-blocker hypothesis (revisited)
+
+The previous draft of this section concluded Phase-o was a failure and that
+Glass-off neither hurt nor helped. **With Phase-o seed 3's win included,
+the conclusion is more nuanced**:
+
+- Glass-off at 2M survives without catastrophe (local seed 4 had a
+  transient collapse but recovered).
+- Glass-off doesn't TRIGGER the surge — Phase-o seed 3 surged before
+  Glass-off.
+- Glass-off doesn't appear to HURT either — Phase-o seed 3 sustained
+  500+ from 1M to 4M+ across the Glass-off boundary at 2M with no
+  visible drop.
+
+So Glass is genuinely peripheral. **Not a help, not a serious hindrance.**
+The user's hybrid hypothesis (abstraction-as-blocker) is *partially* validated
+— Glass isn't a *help*; but it's also not the BLOCKER that prevents the
+other 17 seeds from breaking 500. **The actual blocker is the RNG-driven
+random selection of which seeds find foot-hop within their first 1M env
+steps.**
+
+Phase-o (Glass OFF after 2M env steps) ran on both boxes. Results:
+
+| seed | basin | peak MPPI | comment |
+|------|:-----:|----------:|---------|
+| Phase-o seed 4 (local) | K=4 | **254** | almost identical to Phase-m's 262 |
+| Phase-o seed 1 (remote) | K=4 | **391** | better than Phase-m's 294 but well below Phase-f seed 1's 571 |
+
+Both seeds plateaued well below 500. Specifically:
+- **Local seed 4 climbed slowly post-Glass-off** (175 @ 2.5M → 254 @ 8M = +79 over 5.5M env steps). The encoder, freed from Glass, did inch upward — but the climb rate is too slow to ever reach 500 before early-stop.
+- **Remote seed 1** held a plateau at 380–391 from 1.75M onward. The Glass-off at 2M produced no collapse and no surge — essentially neutral.
+
+There was a **transient collapse on local seed 4 right at the Glass-off boundary** (MPPI 137 @ 1.75M → 1.4 @ 2M) but it recovered by 2.25M. So abruptly disabling Glass is survivable, not fatal. But not helpful either.
+
+### 10.1 Verdict on the abstraction-as-blocker hypothesis
+
+The user's iteration-2 concern was: *abstractions may speed up early learning
+but be a blocker later*. Phase-o tested the prediction directly by disabling
+Glass mid-training. The data say:
+
+- **Phase-o doesn't unlock the surge** to >500 that Glass-on rarely achieves.
+- **Phase-o doesn't dramatically hurt** either (peak 391 vs Phase-m 294 on the
+  same seed is a modest improvement; peak 254 vs Phase-m 262 is a wash).
+- **Conclusion: Glass is neither a help nor a primary blocker** at the level of
+  knobs we've been turning. It's *peripheral* — adding compute and bias but
+  not determining the final peak.
+
+The real driver of >500 peaks (Phase-f seed 1: 571; Phase-j seed 2: 518) is
+**the policy happening to find the foot-hop technique early in training**, before
+any Glass dynamics can lock anything in. Once a seed is in the "knee-walk"
+attractor by ~1M env steps, no Glass-side or curriculum-side intervention we've
+tried (smooth, ccoef, λ_temporal, basin fix, Glass-off) gets it back out.
+
+### 10.2 17→19 scoreboard, hit rate 2/19 = 10.5%
+
+Adding Phase-m + Phase-o results (only the new ones, both K=4 basin):
+
+| seed | peak | knob suite | >500? |
+|------|-----:|------------|:-----:|
+| Phase-m seed 4 | 262 | Python-cond smooth | ❌ |
+| Phase-m seed 5 | 286 | Python-cond smooth | ❌ |
+| Phase-m_remote seed 1 | 294 | Python-cond smooth | ❌ |
+| **Phase-o seed 4** | **254** | hybrid (Glass OFF @2M) | ❌ |
+| **Phase-o_remote seed 1** | **391** | hybrid (Glass OFF @2M) | ❌ |
+
+Hit rate over 19 seeds: still **2/19 = 10.5%**. No new wins.
+
+### 10.3 Hypothesis: the surge is RNG-determined, not knob-determined (re-confirmed with Phase-o seed 3)
+
+Across all 19 seeds in 7 phases, **the two seeds that broke 500 (Phase-f seed
+1 at 571, Phase-j seed 2 at 518) each used a DIFFERENT seed number** and a
+DIFFERENT knob configuration. They're not "the same seed always wins" — they
+look more like "any seed can win by luck of early exploration, and our knob
+choices don't change the win rate much."
+
+Per-seed analysis across all our phases:
+
+| seed_number | times in K=4 | times peaked > 500 |
+|:-----------:|-------------:|-------------------:|
+| 1 | 6 | 1 (Phase-f) |
+| 2 | 3 | 1 (Phase-j) |
+| 3 | 4 | 0 |
+| 4 | 5 | 0 |
+| 5 | 4 | 0 |
+
+Seeds 1 and 2 each got lucky exactly once each across many tries. **No seed
+is consistently a winner; the RNG path that produces foot-hop is rare and
+slightly different each phase.**
+
+---
+
+## 11. What this means for the goal "all 5 seeds > 500"
+
+It's now clear that **no smoothing-or-Glass-side knob can rescue this**. The
+remaining viable directions, in increasing order of intrusiveness:
+
+### 11.1 Phase-p — proper Q-reset (REDQ-style, with pi-update pause)
+
+The previous Q-reset (Phase-e) was buggy (re-init full opt state). A correct
+implementation:
+1. Reset only Q's slice of opt state (preserve pi/enc/dyn Adam moments)
+2. Pause pi/enc/dyn gradient updates for ~50k env steps after reset, letting
+   Q re-converge from the preserved target Q
+
+Hypothesis: Q-overestimation locking the policy into the knee-walk gait is
+the actual mechanism. Reset breaks the lock; pi-pause lets it stick.
+
+Cost: ~50 LOC. Diagnostic value: high (independent of Glass).
+
+### 11.2 Phase-r — reward shaping (penalise knee-ground contact)
+
+Modify `mujoco_playground/_src/dm_control_suite/hopper.py` to add a small
+negative reward when the knee body is in contact with the floor. Forces the
+policy toward foot-strike-only gaits — the technique the video analysis
+showed is the difference between winners (571) and stuck (262).
+
+Cost: ~30 LOC + needs vendoring the env file. Diagnostic: very direct.
+
+### 11.3 Phase-s — distributional Q (quantile regression)
+
+Replace the two-hot 101-bin Q distribution with quantile regression (per
+blog §9 item 1). Better Q estimates → better policy gradient direction →
+more reliable technique discovery.
+
+Cost: ~200 LOC, biggest algorithmic change. Defer until p/r tried.
+
+### Recommendation
+
+Run **Phase-p and Phase-r in parallel** (one per box) — they attack
+orthogonal failure mechanisms (critic-side vs reward-side) and either one
+producing >500 reliably would solve the user's goal.
