@@ -489,26 +489,6 @@ def sample_pi(
     return action, log_prob, scaled_entropy
 
 
-# Path 7 / Phase-v — cluster-id as policy/Q observation.
-# Computes the soft cluster distribution S[n_star(z)] and concatenates it
-# to z, returning an augmented latent of shape (..., latent_dim + K).
-# stop_gradient on the cluster feature so policy/critic gradients do not
-# flow back into the Glass head — Glass keeps its own structural loss.
-def augment_z_with_cluster(
-    z: jax.Array,
-    glass_params: dict,
-    proto_temperature: float = 1.0,
-) -> jax.Array:
-    mu = glass_params["prototypes"]
-    zn = z / (jnp.linalg.norm(z, axis=-1, keepdims=True) + 1e-8)
-    mn = mu / (jnp.linalg.norm(mu, axis=-1, keepdims=True) + 1e-8)
-    sim = (zn @ mn.T) / proto_temperature
-    n_star = jnp.argmax(sim, axis=-1)
-    S = jax.nn.softmax(glass_params["assign_logits"], axis=-1)
-    s_oh = S[n_star]
-    return jnp.concatenate([z, jax.lax.stop_gradient(s_oh)], axis=-1)
-
-
 # ---------------------------------------------------------------------------
 # Multi-environment replay buffer
 # ---------------------------------------------------------------------------
@@ -642,8 +622,6 @@ def make_update_fn(
     smoothing_enabled: bool = True,
     glass_lambda_super_se: float = 0.0,
     glass_lambda_super_balance: float = 0.0,
-    use_cluster_obs: bool = False,
-    cluster_obs_proto_temperature: float = 1.0,
 ) -> tuple:
     """Build (single_step, multi_step) JIT-compiled update functions.
 

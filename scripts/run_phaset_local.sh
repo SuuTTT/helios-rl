@@ -26,13 +26,13 @@ export MUJOCO_GL=${MUJOCO_GL:-egl}
 LOG_DIR=$REPO/exp/tdmpc_glass/logs/phaset
 mkdir -p "$LOG_DIR"
 
-TOTAL_STEPS=${TOTAL_STEPS:-3000000}
+TOTAL_STEPS=${TOTAL_STEPS:-10000000}
 SEEDS=${SEEDS:-"1 2 3"}
 KNEE_COEF=${KNEE_COEF:-0.1}
 KNEE_THR=${KNEE_THR:-0.15}
 SMOOTH=${SMOOTH:-0.001}
 WARMUP=${WARMUP:-250000}
-PATIENCE=${PATIENCE:-1500000}
+PATIENCE=${PATIENCE:-3000000}
 
 echo "[phaset] start $(date -u +%FT%TZ) seeds=[$SEEDS] knee_coef=$KNEE_COEF knee_thr=$KNEE_THR total=$TOTAL_STEPS" \
     | tee -a "$LOG_DIR/queue.log"

@@ -492,7 +492,6 @@ def train_tdmpc2(
     knee_penalty_threshold: float = 0.15,
     cluster_intrinsic_coef: float = 0.0,
     cluster_intrinsic_window: int = 20,
-    cluster_intrinsic_decay_steps: int = 0,
 ) -> None:
     """Train TD-MPC2 or TD-MPC-Glass."""
     algo_name = "TD-MPC-Glass" if use_glass else "TD-MPC2"
@@ -742,17 +741,11 @@ def train_tdmpc2(
     # Compute current Glass cluster id per env, maintain ring buffer of last W,
     # add coef * entropy(window) to training reward. Encourages gait diversity
     # via Glass partition without modifying the env.
-    _cluster_coef_init = float(cluster_intrinsic_coef)
+    _cluster_coef = float(cluster_intrinsic_coef)
     _cluster_window = int(cluster_intrinsic_window)
-    _cluster_decay_steps = int(cluster_intrinsic_decay_steps)
-    _cluster_decay_start = int(expl_until) if expl_until is not None else 0
-    _cluster_active = use_glass and _cluster_coef_init > 0
+    _cluster_active = use_glass and _cluster_coef > 0
     if _cluster_active:
-        if _cluster_decay_steps > 0:
-            print(f"  Cluster-entropy intrinsic reward active: coef={_cluster_coef_init} window={_cluster_window} "
-                  f"linear-decay [{_cluster_decay_start:,} -> {_cluster_decay_steps:,}] env-steps", flush=True)
-        else:
-            print(f"  Cluster-entropy intrinsic reward active: coef={_cluster_coef_init} window={_cluster_window} (static)", flush=True)
+        print(f"  Cluster-entropy intrinsic reward active: coef={_cluster_coef} window={_cluster_window}", flush=True)
         _glass_K = int(glass_cfg.get("num_clusters", 8))
         # per-env ring buffer of cluster ids (np for cheap host-side updates)
         _cluster_history = np.zeros((N_ENVS, _cluster_window), dtype=np.int32)
@@ -960,27 +953,12 @@ def train_tdmpc2(
                 pen_np = np.array(knee_penalty_fn(env_state))
                 rews_np = rews_np - _knee_pen_coef * pen_np
             # Path P / Phase-P — cluster-entropy intrinsic reward (training only).
-            # Phase-Pa: linearly decay coef to 0 over [_cluster_decay_start, _cluster_decay_steps]
-            # so intrinsic is an exploration curriculum, not a permanent reward distortion.
             if _cluster_active:
-                if _cluster_decay_steps > 0:
-                    frac = max(
-                        0.0,
-                        min(
-                            1.0,
-                            (env_steps - _cluster_decay_start)
-                            / max(1, _cluster_decay_steps - _cluster_decay_start),
-                        ),
-                    )
-                    _cluster_coef = _cluster_coef_init * (1.0 - frac)
-                else:
-                    _cluster_coef = _cluster_coef_init
-                if _cluster_coef > 1e-6:
-                    cluster_ids = np.array(cluster_id_batch(params, jnp.asarray(new_obs)))  # (N_ENVS,)
-                    _cluster_history[:, _cluster_history_ptr] = cluster_ids
-                    _cluster_history_ptr = (_cluster_history_ptr + 1) % _cluster_window
-                    ent_np = cluster_entropy_per_env(_cluster_history)
-                    rews_np = rews_np + _cluster_coef * ent_np
+                cluster_ids = np.array(cluster_id_batch(params, jnp.asarray(new_obs)))  # (N_ENVS,)
+                _cluster_history[:, _cluster_history_ptr] = cluster_ids
+                _cluster_history_ptr = (_cluster_history_ptr + 1) % _cluster_window
+                ent_np = cluster_entropy_per_env(_cluster_history)
+                rews_np = rews_np + _cluster_coef * ent_np
             buf.add_batch(obs_np, acts_np, rews_np, done_np)
             obs_np    = new_obs
             env_steps += N_ENVS
@@ -1243,10 +1221,6 @@ def parse_args():
     ap.add_argument("--cluster_intrinsic_window", type=int, default=20,
                     help="Window size W for the cluster-entropy intrinsic reward (Path P). Default 20 frames "
                          "(~0.4s at 50Hz). Larger window = longer-horizon diversity prior.")
-    ap.add_argument("--cluster_intrinsic_decay_steps", type=int, default=0,
-                    help="Phase-Pa: linearly decay --cluster_intrinsic_coef to 0 between --expl_until and "
-                         "this env-step. 0 disables decay (static intrinsic, Phase-P behaviour). Recommended "
-                         "3,000,000 so by 3M the policy trains on pure extrinsic reward.")
     return ap.parse_args()
 
 
@@ -1333,7 +1307,6 @@ def main():
                         knee_penalty_threshold=args.knee_penalty_threshold,
                         cluster_intrinsic_coef=args.cluster_intrinsic_coef,
                         cluster_intrinsic_window=args.cluster_intrinsic_window,
-                        cluster_intrinsic_decay_steps=args.cluster_intrinsic_decay_steps,
                     )
                 else:
                     print(f"Unknown algo: {algo}", flush=True)
