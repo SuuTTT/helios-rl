@@ -88,4 +88,57 @@ dead and we need to either: (a) freeze Glass params at glass_warmup boundary
 when Path 7 is on, or (b) use a discrete one-hot cluster id (hard argmax) so
 the input changes only when n_star flips, not continuously.
 
+### §5.2 Update: Phase-v s1 is *not* dead — surge-crash is the normal pattern
+
+A few hours later, Phase-v s1 came back from the trough:
+```
+2.00M MPPI=91  ← peak 1
+2.25M MPPI=1.6  (crash)
+3.50M MPPI=94   ← peak 2
+3.75M MPPI=42
+4.00M MPPI=117  ← peak 3
+4.25M MPPI=145
+4.75M MPPI=185
+6.25M MPPI=209
+7.50M MPPI=218  ← peak (final best)
+```
+Walking back §5.1: **Phase-v s1 oscillates with a rising upper envelope.** Path 7
+is learning, just slowly. Final at 10M cap: best MPPI=218.
+
+Crucially, Phase-x s1 (Path 9, no Glass-obs change) showed the *same* surge-crash
+pattern (193 @ 2M → 11.1 @ 2.25M → 238 @ 2.75M → 329 @ 3M → 453 @ 4.25M). So
+the surge-crash is **TD-MPC2's native climb pattern on HopperHop**, not caused by
+Glass features. The Phase-p winner s4 had crashes at 2M=2.4 and 5.25M=24 too —
+and still reached 538 by 10M.
+
+**Working principle now**: a single crash does not falsify a run. Only verify
+death after 3M env-steps with no new best (the early-stop threshold).
+
+### §5.3 Lesson from Phase-v seed 2: stuck-seed is exploration-bound, not Glass-bound
+
+Phase-v seed 2 ran for 4h49m / 9.25M env-steps and never crossed MPPI=20
+(best=19.9 @ 6.5M). All 37 evals bouncing in 0–20 range, no surge. **Killed
+early to free the local 4070 Ti for a better experiment.**
+
+Why it failed:
+- Random init dropped the policy in a degenerate gait basin (K=3 / "knee-walk"
+  pattern from iteration 4 §10).
+- The EXPL_UNTIL=500k random-action phase didn't visit enough diverse states
+  for the encoder/dynamics to model alternative gaits.
+- Glass cluster-obs (Path 7) didn't help, because *the cluster information is
+  about which gait the policy IS using, not which it COULD use*. You can't
+  escape a basin by being told you're in it — you need exploration that
+  generates trajectories from a different basin.
+
+**Implication**: Path 7 / Path 9 / Path 10 all fail the stuck-seed problem
+because none of them change the action distribution during early exploration.
+Stuck seeds need **exploration-side interventions** (e.g. Path 4 BC from a
+winner, or a much longer EXPL_UNTIL with random+pi mixture). Architectural and
+planner-side tweaks help winning seeds get faster but don't rescue losers.
+
+This narrows our 5-seed-mean problem: even if Path 9 wins on 3-4 seeds, the
+1-in-5 "stuck" pattern likely persists. To beat the iteration-4 finals
+[438, 526, 294, 187, 562] consistently we likely need BOTH a winning architecture
+(Path 9 candidate) AND a stuck-seed rescue (Path 4 candidate).
+
 (Best MPPI is updated as evals stream in — check the monitor notifications.)

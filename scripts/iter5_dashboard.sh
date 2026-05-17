@@ -31,6 +31,12 @@ for s in 1 2 3; do
         printf "  Phase-v seed %d (Path 7):  best %-30s   last %s\n" $s "$(best_mppi $f)" "$(last_eval $f)"
     fi
 done
+for s in 1 2 3 4 5; do
+    f="$REPO/exp/tdmpc_glass/HopperHop_phasex_local/seed_${s}.csv"
+    if [[ -f $f ]]; then
+        printf "  Phase-x seed %d (Path 9):  best %-30s   last %s\n" $s "$(best_mppi $f)" "$(last_eval $f)"
+    fi
+done
 
 # Remote 3060Ti
 echo -e "${CYN}── ssh3:11271 (3060Ti) ──${NC}"
@@ -71,6 +77,20 @@ ssh -p 11115 -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@ssh6.vast.ai \
             /root/helios-rl/exp/tdmpc_glass/HopperHop_phasev_4060/seed_3.csv; do
      [[ -f \$f ]] || continue
      name=\$(basename \$(dirname \$f) | sed 's/HopperHop_//; s/_remote_3m//; s/_4060//')
+     seed=\$(basename \$f .csv | sed 's/seed_//')
+     best=\$(awk -F, 'NR>1 && \$3==\"mppi\" {if(\$2+0>m){m=\$2+0; ms=\$1}} END{if(m>0) printf \"%.1f @ %s\", m, ms; else printf \"—\"}' \$f)
+     last=\$(awk -F, 'NR>1 && \$3==\"mppi\"' \$f | tail -1 | awk -F, '{printf \"step=%s MPPI=%.1f\", \$1, \$2+0}')
+     printf '  %s seed %s: best %-30s   last %s\n' \"\$name\" \"\$seed\" \"\$best\" \"\$last\"
+   done" 2>/dev/null
+
+# Remote 3090 (ssh9:16233)
+echo -e "${CYN}── ssh9:16233 (3090, 24GB) ──${NC}"
+ssh -p 16233 -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@ssh9.vast.ai \
+  "for f in /root/helios-rl/exp/tdmpc_glass/HopperHop_phasex_3090/seed_*.csv \
+            /root/helios-rl/exp/tdmpc_glass/HopperHop_phasey_3090/seed_*.csv \
+            /root/helios-rl/exp/tdmpc_glass/HopperHop_phasev_3090/seed_*.csv; do
+     [[ -f \$f ]] || continue
+     name=\$(basename \$(dirname \$f) | sed 's/HopperHop_//; s/_3090//')
      seed=\$(basename \$f .csv | sed 's/seed_//')
      best=\$(awk -F, 'NR>1 && \$3==\"mppi\" {if(\$2+0>m){m=\$2+0; ms=\$1}} END{if(m>0) printf \"%.1f @ %s\", m, ms; else printf \"—\"}' \$f)
      last=\$(awk -F, 'NR>1 && \$3==\"mppi\"' \$f | tail -1 | awk -F, '{printf \"step=%s MPPI=%.1f\", \$1, \$2+0}')

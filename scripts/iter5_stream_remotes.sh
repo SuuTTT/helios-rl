@@ -44,6 +44,7 @@ while true; do
   rsync -a -e "ssh -p 17637 -o StrictHostKeyChecking=no -o ConnectTimeout=10" \
         --include='HopperHop_phasex_2x3060/' --include='HopperHop_phasex_2x3060/**/*.csv' --include='HopperHop_phasex_2x3060/**' \
         --include='HopperHop_phasev_2x3060/' --include='HopperHop_phasev_2x3060/**/*.csv' --include='HopperHop_phasev_2x3060/**' \
+        --include='HopperHop_phasex_ns1024/' --include='HopperHop_phasex_ns1024/**/*.csv' --include='HopperHop_phasex_ns1024/**' \
         --exclude='**/checkpoints/**' --exclude='**/checkpoints' \
         root@78.83.187.54:/root/helios-rl/exp/tdmpc_glass/ \
         $MIRROR/ssh17637_2x3060/ >/dev/null 2>&1
@@ -54,7 +55,19 @@ while true; do
            $MIRROR/ssh17637_2x3060/HopperHop_phasex_2x3060/seed_1.csv 2>/dev/null)
   bestx2=$(awk -F, 'NR>1 && $3=="mppi" {if($2+0>m)m=$2+0} END{printf "%.1f", m}' \
            $MIRROR/ssh17637_2x3060/HopperHop_phasex_2x3060/seed_2.csv 2>/dev/null)
-  echo "[$ts][stream] ssh17637    phasex s1 best=${bestx1:-—}  phasex s2 best=${bestx2:-—}"
+  bestx5=$(awk -F, 'NR>1 && $3=="mppi" {if($2+0>m)m=$2+0} END{printf "%.1f", m}' \
+           $MIRROR/ssh17637_2x3060/HopperHop_phasex_ns1024/seed_5.csv 2>/dev/null)
+  echo "[$ts][stream] ssh17637    phasex s1 best=${bestx1:-—}  phasex s2 best=${bestx2:-—}  ns1024 s5 best=${bestx5:-—}"
 
-  sleep 120
+  # === 3090 (ssh9:16233) ===
+  mkdir -p $MIRROR/ssh9_3090
+  rsync -a -e "ssh -p 16233 -o StrictHostKeyChecking=no -o ConnectTimeout=10" \
+        --exclude='**/checkpoints/**' --exclude='**/checkpoints' \
+        root@ssh9.vast.ai:/root/helios-rl/exp/tdmpc_glass/HopperHop_phasex_3090/ \
+        $MIRROR/ssh9_3090/HopperHop_phasex_3090/ >/dev/null 2>&1
+  bestx4=$(awk -F, 'NR>1 && $3=="mppi" {if($2+0>m)m=$2+0} END{printf "%.1f", m}' \
+           $MIRROR/ssh9_3090/HopperHop_phasex_3090/seed_4.csv 2>/dev/null)
+  echo "[$ts][stream] ssh9_3090   phasex s4 best=${bestx4:-—}"
+
+  sleep 600
 done
