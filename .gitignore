@@ -37,6 +37,7 @@ htmlcov/
 *.npy
 *.npz
 *.safetensors
+*.pkl
 
 # Weights & Biases
 wandb/
@@ -44,6 +45,7 @@ wandb/
 # Hydra outputs
 outputs/
 multirun/
+
 
 # Logs
 logs/

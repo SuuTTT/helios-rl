@@ -705,22 +705,39 @@ def make_update_fn(
 
             # Value / Q loss
             z_n = jax.lax.stop_gradient(z_tgt_t1)
+            # Path 7 / Phase-v: augment z with cluster soft distribution
+            # before pi/q lookups. Python-conditional so the graph matches
+            # the pre-augmentation version exactly when disabled.
+            if use_cluster_obs:
+                z_n_aug = augment_z_with_cluster(z_n, tp["glass"], cluster_obs_proto_temperature)
+            else:
+                z_n_aug = z_n
             k, _ = jax.random.split(k)
-            tp_mean_std = pi_net.apply(tp["pi"], z_n)
+            tp_mean_std = pi_net.apply(tp["pi"], z_n_aug)
             pi_a_mean = jnp.tanh(tp_mean_std[0])
-            q_next_logits = q_net.apply(tp["q"], z_n, pi_a_mean)
+            q_next_logits = q_net.apply(tp["q"], z_n_aug, pi_a_mean)
             q_next_vals   = two_hot_inv(q_next_logits)
             v_n = jnp.maximum(jnp.min(q_next_vals, -1), 0.0)
             td  = r_t + gamma * (1 - d_t) * jax.lax.stop_gradient(v_n)
-            qp  = q_net.apply(params["q"], z_t, a_t)
+            if use_cluster_obs:
+                z_t_aug = augment_z_with_cluster(z_t, params["glass"], cluster_obs_proto_temperature)
+            else:
+                z_t_aug = z_t
+            qp  = q_net.apply(params["q"], z_t_aug, a_t)
             vl  = w * jnp.mean(jnp.sum(soft_ce(qp, two_hot(td)[:, None, :]), -1))
 
             # Policy loss with RunningScale (v24)
-            pi_mean_std = pi_net.apply(params["pi"], jax.lax.stop_gradient(z_t))
+            if use_cluster_obs:
+                z_t_sg_aug = augment_z_with_cluster(
+                    jax.lax.stop_gradient(z_t), params["glass"], cluster_obs_proto_temperature
+                )
+            else:
+                z_t_sg_aug = jax.lax.stop_gradient(z_t)
+            pi_mean_std = pi_net.apply(params["pi"], z_t_sg_aug)
             pi2_mean    = jnp.tanh(pi_mean_std[0])
             q_pi2_logits = q_net.apply(
                 jax.lax.stop_gradient(params["q"]),
-                jax.lax.stop_gradient(z_t),
+                z_t_sg_aug,
                 pi2_mean,
             )
             q_pi2_vals = two_hot_inv(q_pi2_logits)  # (B, 2)
@@ -751,7 +768,13 @@ def make_update_fn(
         # to flip basin-fragile seeds into K=3 (Phase-m fix).
         if smoothing_enabled:
             def _pi_mean_at_z(z_step):
-                m, _ = pi_net.apply(params["pi"], jax.lax.stop_gradient(z_step))
+                if use_cluster_obs:
+                    z_in = augment_z_with_cluster(
+                        jax.lax.stop_gradient(z_step), params["glass"], cluster_obs_proto_temperature
+                    )
+                else:
+                    z_in = jax.lax.stop_gradient(z_step)
+                m, _ = pi_net.apply(params["pi"], z_in)
                 return jnp.tanh(m)
             all_pi_mean = jax.vmap(_pi_mean_at_z)(z_t_T)  # (T-1, B, act_dim)
             smooth_loss = jnp.mean(jnp.sum((all_pi_mean[1:] - all_pi_mean[:-1]) ** 2, axis=-1))
@@ -897,6 +920,8 @@ def make_mppi_fn(
     act_dim: int = 4,
     gamma: float = 0.99,
     rew_scale: float = 10.0,
+    use_cluster_obs: bool = False,
+    cluster_obs_proto_temperature: float = 1.0,
 ):
     """Build the JIT-compiled MPPI planning function (v24 parity).
 
@@ -945,9 +970,14 @@ def make_mppi_fn(
 
         z0_single = enc.apply(params["enc"], obs[None])[0]
 
+        def _aug(z):
+            if use_cluster_obs:
+                return augment_z_with_cluster(z, params["glass"], cluster_obs_proto_temperature)
+            return z
+
         def pi_rollout_stoch(key):
             def pi_step(z, k):
-                mean_a, log_std_a = pi_net.apply(params["pi"], z[None])
+                mean_a, log_std_a = pi_net.apply(params["pi"], _aug(z[None]))
                 mean_a    = mean_a[0]
                 log_std_a = log_std_a[0]
                 eps = jax.random.normal(k, mean_a.shape)
@@ -981,9 +1011,10 @@ def make_mppi_fn(
                     return z2, r
 
                 zf, rs = jax.lax.scan(env_step, z_i, a_seq)
-                pi_a_mean, _ = pi_net.apply(params["pi"], zf[None])
+                zf_aug = _aug(zf[None])
+                pi_a_mean, _ = pi_net.apply(params["pi"], zf_aug)
                 pi_a_squashed = jnp.tanh(pi_a_mean)
-                q_logits = q_net.apply(params["q"], zf[None], pi_a_squashed)
+                q_logits = q_net.apply(params["q"], zf_aug, pi_a_squashed)
                 vt = jnp.maximum(jnp.min(two_hot_inv(q_logits)), 0.0).squeeze()
                 return jnp.sum(_gammas * rs) + _gamma_H * vt
 

@@ -481,6 +481,7 @@ def train_tdmpc2(
     act_noise_end: float | None = None,
     act_noise_anneal_steps: int = 1_000_000,
     mppi_horizon: int | None = None,
+    mppi_n_samples: int | None = None,
     q_reset_steps: list[int] | None = None,
     latent_action_smooth_coef: float = 0.0,
     consistency_coef: float | None = None,
@@ -545,7 +546,9 @@ def train_tdmpc2(
     H          = int(mppi_horizon) if mppi_horizon is not None else d["H"]   # 3 by default
     if mppi_horizon is not None and H != d["H"]:
         print(f"  MPPI horizon override: H={H} (DEFAULTS['H']={d['H']})", flush=True)
-    NS         = d["NS"]           # 512
+    NS         = int(mppi_n_samples) if mppi_n_samples is not None else d["NS"]   # 512 default
+    if mppi_n_samples is not None and NS != d["NS"]:
+        print(f"  MPPI n_samples override: NS={NS} (DEFAULTS['NS']={d['NS']})", flush=True)
     elites     = d["NUM_ELITES"]   # 64
     pi_trajs   = d["NUM_PI_TRAJS"] # 24
     NI         = d["NI"]           # 6
@@ -580,12 +583,21 @@ def train_tdmpc2(
     dummy_obs  = jnp.zeros((1, obs_dim))
     dummy_z    = jnp.zeros((1, latent_dim))
     dummy_act  = jnp.zeros((1, act_dim))
+    # Path 7 / Phase-v: when use_cluster_obs is on, pi/q first layer is sized
+    # for (latent_dim + num_clusters). Init with augmented dummy.
+    _use_cluster_obs = bool(use_glass and glass_cfg.get("use_cluster_obs", False))
+    if _use_cluster_obs:
+        _K = int(glass_cfg.get("num_clusters", 8))
+        dummy_z_aug = jnp.zeros((1, latent_dim + _K))
+        print(f"  Cluster-id policy observation active: pi/q first layer in_dim={latent_dim}+{_K}={latent_dim + _K}", flush=True)
+    else:
+        dummy_z_aug = dummy_z
     params = {
         "enc": enc_net.init(ek, dummy_obs),
         "dyn": dyn_net.init(dk, dummy_z, dummy_act),
         "rew": rew_net.init(rk, dummy_z, dummy_act),
-        "q":   q_net.init(qk, dummy_z, dummy_act),
-        "pi":  pi_net.init(pk, dummy_z),
+        "q":   q_net.init(qk, dummy_z_aug, dummy_act),
+        "pi":  pi_net.init(pk, dummy_z_aug),
     }
     if use_glass:
         params["glass"] = init_glass_params(
@@ -664,6 +676,8 @@ def train_tdmpc2(
                 smoothing_enabled=smoothing_enabled,
                 glass_lambda_super_se=float(glass_cfg.get("lambda_super_se") or 0.0),
                 glass_lambda_super_balance=float(glass_cfg.get("lambda_super_balance") or 0.0),
+                use_cluster_obs=bool(glass_cfg.get("use_cluster_obs", False)),
+                cluster_obs_proto_temperature=float(glass_cfg.get("proto_temperature", 1.0)),
             )
         else:
             _, ms = make_update_fn(
@@ -685,6 +699,8 @@ def train_tdmpc2(
         min_std=MIN_STD, max_std=MAX_STD,
         act_low=al, act_high=ah, act_dim=act_dim,
         gamma=gamma, rew_scale=rew_scale,
+        use_cluster_obs=bool(use_glass and glass_cfg.get("use_cluster_obs", False)),
+        cluster_obs_proto_temperature=float(glass_cfg.get("proto_temperature", 1.0)),
     )
     if use_glass:
         glass_diag = make_glass_diag_fn(
@@ -699,10 +715,13 @@ def train_tdmpc2(
         diag_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Vectorised action function (pi + noise, used during data collection)
+    _proto_T = float(glass_cfg.get("proto_temperature", 1.0))
     @jax.jit
     def act_fn_batch(p, obs):
+        from helios.algorithms.tdmpc_glass import augment_z_with_cluster as _aug
         z = enc_net.apply(p["enc"], obs)
-        mu, _ = pi_net.apply(p["pi"], z)
+        z_in = _aug(z, p["glass"], _proto_T) if _use_cluster_obs else z
+        mu, _ = pi_net.apply(p["pi"], z_in)
         return jnp.tanh(mu)
 
     # ── Buffer (numpy, per-env ring buffer)
@@ -796,7 +815,9 @@ def train_tdmpc2(
 
     @jax.jit
     def pi_apply(p, z):
-        mu, _ = pi_net.apply(p["pi"], z)
+        from helios.algorithms.tdmpc_glass import augment_z_with_cluster as _aug
+        z_in = _aug(z, p["glass"], _proto_T) if _use_cluster_obs else z
+        mu, _ = pi_net.apply(p["pi"], z_in)
         return jnp.tanh(mu[0])
 
     @jax.jit
@@ -1192,6 +1213,9 @@ def parse_args():
                     help="Final exploration-noise std after annealing (default: same as --act_noise_start, i.e. no anneal)")
     ap.add_argument("--act_noise_anneal_steps", type=int, default=1_000_000,
                     help="Env-steps over which to linearly anneal noise from start to end (default: 1M)")
+    ap.add_argument("--mppi_n_samples", type=int, default=None,
+                    help="Path 9 / Phase-x: override MPPI sample count NS. Default 512. Try 2048 to test "
+                         "whether stuck seeds are search-failure (limited samples) vs learning-failure.")
     ap.add_argument("--mppi_horizon", type=int, default=None,
                     help="Override MPPI horizon H (and training seq_len=H+1). Default: DEFAULTS['H']=3")
     ap.add_argument("--q_reset_steps", type=str, default=None,
@@ -1247,6 +1271,11 @@ def parse_args():
                     help="Phase-Pa: linearly decay --cluster_intrinsic_coef to 0 between --expl_until and "
                          "this env-step. 0 disables decay (static intrinsic, Phase-P behaviour). Recommended "
                          "3,000,000 so by 3M the policy trains on pure extrinsic reward.")
+    ap.add_argument("--use_cluster_obs", action="store_true",
+                    help="Path 7 / Phase-v: concat the soft Glass cluster distribution S[n_star(z)] "
+                         "(K-dim) to z before pi/q lookups. Architectural change, fully benchmark-fair "
+                         "(no reward modification). Policy can condition on which gait phase it's in. "
+                         "stop_gradient on the cluster computation so Glass keeps its own structural loss.")
     return ap.parse_args()
 
 
@@ -1273,6 +1302,7 @@ def main():
         "lambda_super_se": args.glass_lambda_super_se,
         "lambda_super_balance": args.glass_lambda_super_balance,
         "assign_logits_init_scale": args.glass_assign_logits_init_scale,
+        "use_cluster_obs": args.use_cluster_obs,
     }
     if args.glass_stopgrad_graph is not None:
         glass_overrides["stopgrad_graph"] = args.glass_stopgrad_graph == "true"
@@ -1322,6 +1352,7 @@ def main():
                         act_noise_end=args.act_noise_end,
                         act_noise_anneal_steps=args.act_noise_anneal_steps,
                         mppi_horizon=args.mppi_horizon,
+                        mppi_n_samples=args.mppi_n_samples,
                         q_reset_steps=q_reset,
                         latent_action_smooth_coef=args.latent_action_smooth_coef,
                         consistency_coef=args.consistency_coef,

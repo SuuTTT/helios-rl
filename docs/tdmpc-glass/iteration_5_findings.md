@@ -1,0 +1,91 @@
+# Iteration 5 — TD-MPC-Glass HopperHop sweep (live)
+
+Goal: get all 5 HopperHop seeds > 500 (ideally > 700), beat Phase-1b baseline
+finals [438, 526, 294, 187, 562]. Iteration 4 culminated in three organic
+winners (Phase-f s1, Phase-j s2, Phase-o s3) at MPPI~500–577 and a knee-penalty
+winner Phase-t s2 = 612 (benchmark-unfair, parked). Iteration 5 explores
+*benchmark-fair* paths in parallel across 4 GPUs.
+
+  bash scripts/iter5_dashboard.sh — run anytime to see best MPPI + last eval across all 5 GPUs.
+  
+## Hardware (live)
+
+| Box                | GPU              | Mem  | Currently running |
+|--------------------|------------------|------|-------------------|
+| Local              | RTX 4070 Ti      | 12GB | Phase-v seed 1 (Path 7) |
+| ssh3:11271         | RTX 3060 Ti      | 8GB  | Phase-y seed 1 (Path 10) |
+| 78.83.187.54:17637 | RTX 3060 Lap GPU0 | 6GB  | Phase-v seed 2 (Path 7) |
+| 78.83.187.54:17637 | RTX 3060 Lap GPU1 | 6GB  | Phase-x seed 1 (Path 9) |
+| ssh6:11115         | RTX 4060         | 8GB  | Phase-v seed 3 (Path 7) — launching |
+
+## Phase legend (what each one tests)
+
+| Phase | Path | What it changes | Hypothesis |
+|-------|------|-----------------|------------|
+| **Phase-v** | 7 | Concat soft cluster distribution S[n*(z)] (8-dim) to z before pi/q lookups. Architectural change; pi/q first layer is now (512+8)→512. Fully benchmark-fair. | Letting the policy see *which gait phase* it's in helps it commit to a coherent hop pattern rather than oscillating at gait transitions. |
+| **Phase-x** | 9 | Larger MPPI sample count: NS=2048 vs default 512. **Planner-only** — training is unchanged from Phase-p baseline. | Tests whether stuck seeds are *search-failure* (planner doesn't find good action sequences) vs *learning-failure* (Q/dynamics models are wrong). If Phase-x rescues a stuck seed, the planner was the bottleneck. |
+| **Phase-y** | 10 | Hierarchical Glass: K_sub=8 fine clusters AND K_super=4 coarse super-clusters trained jointly via two 2D-SE losses on the same prototype graph A. | Iteration 4 §7.4: K=3 basin cap suggests we need a coarser layer; super-clusters might capture the gross gait families (hop/stand/fall) while sub-clusters capture phase. |
+
+## Background falsified (iteration 4 §11)
+
+- **Phase-P** (cluster entropy as intrinsic reward, static coef=0.1): seed 1 peaked
+  MPPI=91 @ 1.25M then collapsed to 2.4 @ 2M. Non-stationary reward signal.
+- **Phase-Pa** (same with linear decay 0.1→0 over [500k, 3M]): seed 1 peaked
+  24.9 @ 1.25M — **3.6× WORSE** than static. Decay didn't help; coef=0.1
+  magnitude is intrinsically incompatible with HopperHop reward scale
+  (max bonus per episode ≈ 210 vs target ~600).
+- **Path P (cluster intrinsic reward) is dead** in both static and annealed forms.
+
+## Standing convention
+
+All Phase-v/x/y runs use:
+- `--expl_until 500000` (Phase-p winner setting — random actions for first 500k env-steps)
+- `--latent_action_smooth_coef 0.001` after curriculum warmup at 250k
+- `--early_stop_patience 3000000` (halt if no new best MPPI for 3M env-steps)
+- `--total_steps 10000000` (10M cap)
+- 3 seeds per phase per box
+
+## Live trajectory comparison (iteration's leading metric: MPPI eval)
+
+The Phase-p WINNER seed 4 (final 538) tracked like this:
+```
+step=    250k  MPPI=  0.2
+step=    500k  MPPI=  7.8
+step=    750k  MPPI=  0.0
+step=  1.00M  MPPI=  3.7
+step=  1.25M  MPPI= 52.7   ← surge starts here
+```
+Use this as the "this run might be a winner" benchmark.
+
+## Live results (updated in-session — see `exp/tdmpc_glass/HopperHop_<phase>/seed_<N>.csv`)
+
+| Phase | Seed | Best MPPI so far | At env-step |
+|-------|------|------------------|-------------|
+| Phase-v | 1 | **91.1** | peak @ 2M, then collapsed (91 → 1.6 → 3.1 → 1.3 over 0.75M steps) |
+| Phase-v | 2 | 0.0 | 250k (random phase) |
+| Phase-v | 3 | — | launching |
+| Phase-x | 1 | 0.0 | 250k (random phase) |
+| Phase-y | 1 | 0.0 | <500k (random phase, see remote log) |
+
+### §5.1 Worrying pattern: Path 7 mimics Path P failure
+
+Phase-v seed 1 hit **exactly the same surge-then-collapse pattern** as Phase-P
+(static intrinsic) and Phase-Pa (decayed intrinsic): single-eval peak at
+MPPI≈91, then collapse to single digits over the next 0.75M env-steps with
+no recovery. This is concerning because Path 7 (cluster as *observation* with
+stop_gradient) shouldn't have the same non-stationary-reward issue as Path P
+(cluster as *reward* signal).
+
+**Working hypothesis**: glass params keep evolving via glass_loss after policy
+starts converging. As they evolve, the soft cluster distribution S[n_star(z)]
+that pi/q sees as input drifts. pi/q was optimized for the OLD distribution.
+Convergence + drift = miscalibrated Q → policy collapse. The stop_gradient on
+the cluster computation prevents pi/q gradients from corrupting Glass, but does
+**not** prevent the drift of Glass's own params from corrupting pi/q's inputs.
+
+If seeds 2 and 3 (on 2x3060 and 4060) reproduce this collapse, Path 7 is also
+dead and we need to either: (a) freeze Glass params at glass_warmup boundary
+when Path 7 is on, or (b) use a discrete one-hot cluster id (hard argmax) so
+the input changes only when n_star flips, not continuously.
+
+(Best MPPI is updated as evals stream in — check the monitor notifications.)

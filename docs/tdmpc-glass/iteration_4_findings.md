@@ -418,3 +418,30 @@ fixes.
 - ⏳ Run a tiny pure-vanilla TD-MPC2 control (no Glass, no smoothing,
   --algos tdmpc2 with the Phase-m smoothing port) for 5 seeds — to know
   the actual TD-MPC2 baseline hit rate on our codebase.
+
+## §11. Path P — Cluster-entropy intrinsic reward (FALSIFIED)
+
+Goal: benchmark-fair alternative to Path 5 (knee penalty). Use Glass clusters
+as exploration prior — reward gait diversity via `coef * entropy(last_W cluster_ids)`.
+Algorithm-internal, no env modification.
+
+### §11.1 Phase-P (static coef=0.1)
+Seed 1: pi=42 → 78 → **MPPI peak 91 @ 1.25M** → 9 → 75 → **collapse to 2.4 @ 2M**.
+Killed at 2M. Hypothesis at kill: static intrinsic creates non-stationarity —
+when policy converges on one gait, cluster window homogenizes → intrinsic drops
+sharply → policy abandons gait to maintain diversity.
+
+### §11.2 Phase-Pa (linear decay coef=0.1 → 0 over [500k, 3M])
+Designed as "exploration curriculum" — by 3M run as pure extrinsic.
+Seed 1: pi=3.5 → 3.8 → **MPPI peak 24.9 @ 1.25M** → never recovers. Early-stopped
+4.25M. **3.6× WORSE than static Phase-P**, not better. Both peaked at exactly 1.25M
+then collapsed at 1.5M — implicating coef=0.1 magnitude, not the decay schedule.
+
+### §11.3 Diagnosis
+Max entropy bonus per step = `0.1 * log(8) ≈ 0.21`. Over 1000-step episode
+≈ 210 reward — comparable to or larger than HopperHop target ~600. Intrinsic
+dominates the signal, not nudges. Even at 50% strength (1.75M, Phase-Pa), it's
+already corrupting Q estimates. Path P falsified in both static and annealed
+forms. Did not retry with smaller coef — moved to Path 7 (cluster as observation,
+not reward) as a cleaner architectural alternative.
+
