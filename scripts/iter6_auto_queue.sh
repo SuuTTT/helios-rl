@@ -80,9 +80,13 @@ while true; do
     next=$(pop_next_queue_line "$qf") || { echo "[autoqueue] $(ts) $tag idle, queue empty"; continue; }
     IFS='|' read -r port host launcher envvars <<< "$next"
     echo "[autoqueue] $(ts) $tag idle → launching: $envvars bash $launcher"
-    ssh -p "$port" -o StrictHostKeyChecking=no root@"$host" \
-        "cd /root/helios-rl && $envvars nohup setsid bash $launcher > /tmp/autoqueue_${tag}.log 2>&1 < /dev/null & disown" \
-        2>&1 | head -3
+    # Use `ssh -f` (background after auth) so SSH session detaches once the remote
+    # `nohup setsid ... &` has been launched. Without -f, ssh holds the channel
+    # open until the remote process closes its stdout, which can hang the queue
+    # for hours.
+    ssh -f -n -p "$port" -o StrictHostKeyChecking=no -o ConnectTimeout=15 root@"$host" \
+        "cd /root/helios-rl ; $envvars nohup setsid bash $launcher > /tmp/autoqueue_${tag}.log 2>&1 < /dev/null & disown ; sleep 1" \
+        >/dev/null 2>&1 || echo "[autoqueue] $(ts) $tag ssh launch returned non-zero (continuing)"
   done
   sleep 300
 done

@@ -6,7 +6,17 @@
 
 Phase-1b baseline finals reference: `[526, 526, 294, 227, 562]`, mean 427, 2/5 > 500.
 
-Refresh with: `bash scripts/iter5_dashboard.sh`
+Refresh with: `bash scripts/iter5_dashboard.sh` (terminal, all 6 boxes auto-detected)
+
+Or web dashboard (live boxes + Plotly curves + click-to-render rollouts):
+
+```
+bash scripts/launch_web_dashboard.sh          # blocks, Ctrl-C to stop
+# or background:
+nohup setsid bash scripts/launch_web_dashboard.sh > /tmp/web_dashboard.log 2>&1 & disown
+```
+
+Then open `http://localhost:5055`. Auto-refreshes boxes every 30 s and curves every 60 s. The "Render Rollout" section lists every checkpoint that has `best_mppi.pkl` on disk; click → background `render_glass_rollout.py` job with progress bar, MP4 plays inline when done.
 
 ## Hardware fleet (current)
 
