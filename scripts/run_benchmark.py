@@ -932,10 +932,19 @@ def train_tdmpc2(
             with open(eval_type_csv, "w") as cf:
                 cf.write("step,reward,eval_type,seed\n")
     elif env_id == "HopperHop":
-        eval_type_csv = EXP_DIR.parent / "tdmpc_dmc" / "hopper-hop-tdmpc2-rerun.csv"
+        # iter 6 fix — vanilla tdmpc2 now uses the same per-seed, tag-aware
+        # layout as Glass. Old shared-CSV path `tdmpc_dmc/hopper-hop-tdmpc2-rerun.csv`
+        # got overwritten on each seed launch (bug discovered with Phase-z).
+        eval_type_csv = (
+            EXP_DIR.parent
+            / "tdmpc_glass"
+            / _env_dir
+            / f"seed_{seed}.csv"
+        )
         eval_type_csv.parent.mkdir(parents=True, exist_ok=True)
-        with open(eval_type_csv, "w") as cf:
-            cf.write("step,reward,eval_type,seed\n")
+        if not eval_type_csv.exists():
+            with open(eval_type_csv, "w") as cf:
+                cf.write("step,reward,eval_type,seed\n")
 
     if use_glass:
         ckpt_dir = (
