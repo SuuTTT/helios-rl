@@ -1,0 +1,3 @@
+# 2x3060 GPU0 queue — runs after Phase-q s1 finishes
+17637|78.83.187.54|scripts/run_phasez_seed_2x3060_gpu0.sh|SEED=4
+17637|78.83.187.54|scripts/run_phasez_seed_2x3060_gpu0.sh|SEED=5

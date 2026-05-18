@@ -20,23 +20,34 @@ sync_box() {
         "$dest/" >/dev/null 2>&1
 }
 
-# Emit one summary line listing best MPPI for every seed_*.csv directly under the box mirror.
+# Emit one summary line listing best MPPI for every LIVE seed_*.csv (modified in last 30 min).
+# This filters out historical/done phase data and only shows actively-updated runs.
 summarize_box() {
   local label=$1 dest=$2
   local out=""
   shopt -s nullglob
-  for csv in "$dest"/HopperHop_*/seed_*.csv; do
+  # Two-tier filter:
+  # 1. CSV mtime newer than the last fully-completed phase (older than 7 days = "old archived")
+  # 2. CSV has at least one eval row (size > 100 bytes; bare header is ~27)
+  # 3. Phase prefix is in "active" allowlist (current iter 5-6 phases)
+  for csv in $(find "$dest" -path "*/HopperHop_*/seed_*.csv" -mtime -2 -size +100c 2>/dev/null | sort); do
     [[ -f $csv ]] || continue
     local fname=$(basename "$csv" .csv)
     [[ "$fname" == *_v1_* || "$fname" == *_v[0-9]_* || "$fname" == *_partial_* || "$fname" == *_died_* || "$fname" == *_final_* ]] && continue
-    local phase=$(basename "$(dirname "$csv")" | sed 's/HopperHop_//; s/_remote_3m//; s/_3060ti//; s/_4060//; s/_2x3060//; s/_local//; s/_ns1024/NS1024/; s/_baseline//')
+    local pdir=$(basename "$(dirname "$csv")")
+    # active-phase allowlist for iter 5-6
+    case "$pdir" in
+      HopperHop_phasex_*|HopperHop_phasey_*|HopperHop_phaseq_*|HopperHop_phasez_*|HopperHop_phasev_*|HopperHop_phasex_ns1024) ;;
+      *) continue;;
+    esac
+    local phase=$(echo "$pdir" | sed 's/HopperHop_//; s/_remote_3m//; s/_3060ti//; s/_4060//; s/_2x3060//; s/_local//; s/_ns1024/_NS1024/; s/_baseline//; s/_knee//')
     local seed=$(echo "$fname" | sed 's/seed_//')
     local best=$(awk -F, 'NR>1 && $3=="mppi" {if($2+0>m)m=$2+0} END{printf "%.0f", m}' "$csv" 2>/dev/null)
     [[ -z "$best" ]] && best="—"
     out+=" ${phase}s${seed}=${best}"
   done
   shopt -u nullglob
-  [[ -z "$out" ]] && out=" (no csvs yet)"
+  [[ -z "$out" ]] && out=" (no active csvs)"
   echo "[$(date -u +%H:%M:%S)][stream] ${label}${out}"
 }
 
