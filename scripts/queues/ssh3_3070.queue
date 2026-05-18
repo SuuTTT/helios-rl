@@ -1,0 +1,3 @@
+# ssh3 RTX 3070 8GB queue — Phase-q knee penalty extra seeds (G2 ceiling sweep)
+# 445 sps confirmed 2026-05-18, Python 3.12 fresh venv
+15229|ssh3.vast.ai|scripts/run_phaseq_knee_5seed.sh|SEEDS=7 XLA_PYTHON_CLIENT_MEM_FRACTION=0.55

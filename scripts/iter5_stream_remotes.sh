@@ -33,7 +33,8 @@ summarize_box() {
   for csv in $(find "$dest" -path "*/HopperHop_*/seed_*.csv" -mtime -2 -size +100c 2>/dev/null | sort); do
     [[ -f $csv ]] || continue
     local fname=$(basename "$csv" .csv)
-    [[ "$fname" == *_v1_* || "$fname" == *_v[0-9]_* || "$fname" == *_partial_* || "$fname" == *_died_* || "$fname" == *_final_* ]] && continue
+    # Skip backup snapshots and diagnostic sidecars
+    [[ "$fname" == *_v1_* || "$fname" == *_v[0-9]_* || "$fname" == *_partial_* || "$fname" == *_died_* || "$fname" == *_final_* || "$fname" == *_done_* || "$fname" == *_diag ]] && continue
     local pdir=$(basename "$(dirname "$csv")")
     # active-phase allowlist for iter 5-6
     case "$pdir" in
@@ -52,15 +53,21 @@ summarize_box() {
 }
 
 while true; do
-  # Mirror all three remote boxes in parallel for speed.
-  sync_box 11271 ssh3.vast.ai          $MIRROR/ssh3_3060ti       &
+  # Mirror all remote boxes in parallel for speed.
+  # sync_box 11271 ssh3.vast.ai (KILLED)          $MIRROR/ssh3_3060ti       &
   sync_box 11115 ssh6.vast.ai          $MIRROR/ssh6_4060         &
   sync_box 17637 78.83.187.54          $MIRROR/ssh17637_2x3060   &
+  sync_box 34217 ssh1.vast.ai          $MIRROR/ssh1_2080ti       &
+  sync_box 15229 ssh3.vast.ai          $MIRROR/ssh3_3070         &
+  sync_box 16779 ssh6.vast.ai          $MIRROR/ssh6_3080         &
   wait
 
-  summarize_box "ssh3_3060ti " $MIRROR/ssh3_3060ti
+  # summarize_box "ssh3_3060ti " $MIRROR/ssh3_3060ti (KILLED)
   summarize_box "ssh6_4060   " $MIRROR/ssh6_4060
   summarize_box "ssh17637    " $MIRROR/ssh17637_2x3060
+  summarize_box "ssh1_2080ti " $MIRROR/ssh1_2080ti
+  summarize_box "ssh3_3070   " $MIRROR/ssh3_3070
+  summarize_box "ssh6_3080   " $MIRROR/ssh6_3080
 
   sleep 600
 done

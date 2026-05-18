@@ -1,3 +1,1 @@
-# 3060Ti queue — runs vanilla TD-MPC2 baseline seeds (slow box, ok for sequential)
-11271|ssh3.vast.ai|scripts/run_phasez_seed_3060ti.sh|SEED=2
-11271|ssh3.vast.ai|scripts/run_phasez_seed_3060ti.sh|SEED=3
+# 3060Ti DESTROYED 2026-05-18 — autoqueue should skip this box

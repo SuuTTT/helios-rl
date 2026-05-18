@@ -311,7 +311,89 @@ if reward shaping is the missing piece.
 | 4 | Phase-r-stack = §7.E, 5 seeds | After r1+r2 — the headline experiment |
 | 5 | §7.D good-state replay | Only if r1+r2+stack don't hit 5/5 > 500 |
 
-## §8. Top-line decisions (current as of 2026-05-18)
+## §9. Hyperparam audit vs official TD-MPC2
+
+Triggered by user question 2026-05-18 "why all runs seem low?". Most settings
+match the official paper; one possibly under-tuned:
+
+| Param | Ours | Official TD-MPC2 | Status |
+|---|---|---|---|
+| latent_dim | 512 | 512 | ✓ |
+| hidden | (512, 512) | (512, 512) | ✓ |
+| num_bins (distributional Q) | 101 | 101 | ✓ |
+| BS (batch size) | 256 | 256 | ✓ |
+| lr | 3e-4 | 3e-4 | ✓ |
+| gamma | 0.99 | 0.99 | ✓ |
+| tau (EMA) | 0.01 | 0.01 | ✓ |
+| H (MPPI horizon) | 3 | 3 | ✓ |
+| NS (MPPI samples) | 512 default | 512 | ✓ (Phase-x overrides 2048) |
+| consistency_coef | 2.0 | 2.0 | ✓ |
+| **K_UPDATE** | **64** | ~1 grad step / env step (≈256 with N_ENVS=256) | **possibly under-training 4×** |
+| EXPL_UNTIL | 25k default | 25k typical | ✓ (Path 1+ overrides 500k) |
+
+**K_UPDATE caveat**: 64 gradient updates per batch of N_ENVS=256 env steps =
+0.25 updates per env step. Official is closer to 1.0. We may be under-trained.
+
+Risk of changing: invalidates all iter 1-5 baseline comparisons. Defer to a
+focused Phase-r-Kup sweep (K_UPDATE ∈ {64, 128, 256}) after current Phase-z/q
+results land. Not a current-iteration action.
+
+### §9.1 Why runs at MPPI 200-300 aren't "low"
+
+Mid-training runs at 200-300 look the same as Phase-x s3 did at 3-6M env-steps
+before it surged to 523 between 6M-10M. The actually-stuck pattern is MPPI 0-50
+indefinitely (Phase-x s4, Phase-v s2, Phase-x s7 currently). Mid-band runs are
+**pre-surge**, not stuck.
+
+## §10. Box reliability cost analysis (2x3060)
+
+The flaky 2x3060 box (6 GB × 2, driver 580) caused measurable training loss.
+
+### §10.1 Sps benchmarks (sps = env-steps / second per single seed)
+
+| Box | sps | Source |
+|---|---|---|
+| Local 4070 Ti (12 GB) | ~540 | `ssh4070ti:exp/.../logs/phasez_baseline/HopperHop_seed_1.log` |
+| 4060 (8 GB, driver 580) | ~540 | `ssh6.vast.ai:exp/.../logs/phasex_4060/HopperHop_seed_8.log` |
+| 3060 Ti (8 GB) | **~118** | `ssh3.vast.ai:exp/.../logs/phasex_3060ti/HopperHop_seed_7.log` (es=4,848,640 sps=118) |
+| 2× 3060 Laptop (6 GB ea., shared) | ~250 per slot | `78.83.187.54:exp/.../logs/phaseq_knee/HopperHop_seed_1.log` |
+
+### §10.2 2x3060 incidents (last ~24h)
+
+| Time (UTC) | Event | Cost |
+|---|---|---|
+| 2026-05-17 07:30 | Phase-x s2 v1 SIGSEGV @ 1.5M env steps | 5h GPU wasted, no usable result |
+| 2026-05-17 08:24 | Phase-x s1 v1 OOM-killed @ 4.5M (peak 453) | trajectory truncated, archived as `seed_1_died_at_4.5M.csv` |
+| 2026-05-17 11:39 | Phase-x s2 v2 OOM-killed @ 3.5M | another wasted slot |
+| 2026-05-17 15:46 | Phase-x s1 v2 OOM-killed @ 5.25M (peak 380) | partial result |
+| 2026-05-17 22:35 | SSH outage ~30 min | watcher relaunched s5 → backup CSV preserved (272.7 peak) |
+| 2026-05-18 00:20 | SSH outage ~16 min | watcher relaunched s4 → **Phase-y s4 382.9 peak LOST** (v1 bug, fixed in v2) |
+| 2026-05-18 02:08 | SSH outage ~30 min | watcher relaunched s5 again (245.5 peak archived) |
+| 2026-05-18 04:00 | SSH outage; watcher misfire | overwrote Phase-y queue's seed_1 (185.7 peak LOST) |
+
+### §10.3 Cost in numbers
+
+- **Wasted GPU time**: ~15-20h across failed/OOM-killed seeds on 2x3060.
+- **Lost trajectories**: 2 (Phase-y s4 v1 = 382.9; Phase-y s1 = 185.7).
+- **Truncated trajectories**: 2 (Phase-x s1 v1 = 453; Phase-x s1 v2 = 380).
+- **Manual interventions**: ~8 times across the day (kills, relaunches, backups, watcher reconfigs).
+
+### §10.4 Counterfactual
+
+If 2x3060 were as stable as the 4060 (which has been zero-incident), we would have:
+- 2 more clean Phase-y seeds (Path 10 CI would have 4-5 seeds instead of 2)
+- 2 more clean Phase-x seeds (Path 9 CI would have 7-8 instead of 5)
+- ~15h less debug/intervention time
+- Faster auto-queue progression — fewer cycles spent on relaunches
+
+### §10.5 Recommendation
+
+Continue using 2x3060 ONLY for **disposable side experiments** (NS=1024 ablation
+test). Move **anything we care about** to the stable boxes (local, 4060, 3060Ti).
+The autoqueue should never queue a primary G1/G2 experiment to 2x3060 without a
+backup CSV strategy.
+
+## §11. Top-line decisions (current as of 2026-05-18)
 
 1. **Don't launch more Phase-x / Phase-v / Phase-y seeds** — variance characterised.
 2. **Path 4 BC is DEFERRED** per user — try env-shaping first (§7).

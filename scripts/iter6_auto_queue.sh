@@ -24,6 +24,9 @@ BOX_PORT[ssh6_4060]=11115;        BOX_HOST[ssh6_4060]=ssh6.vast.ai;   BOX_GPUMAS
 BOX_PORT[ssh3_3060ti]=11271;      BOX_HOST[ssh3_3060ti]=ssh3.vast.ai; BOX_GPUMASK[ssh3_3060ti]=""
 BOX_PORT[ssh17637_gpu0]=17637;    BOX_HOST[ssh17637_gpu0]=78.83.187.54; BOX_GPUMASK[ssh17637_gpu0]="CUDA_VISIBLE_DEVICES=0"
 BOX_PORT[ssh17637_gpu1]=17637;    BOX_HOST[ssh17637_gpu1]=78.83.187.54; BOX_GPUMASK[ssh17637_gpu1]="CUDA_VISIBLE_DEVICES=1"
+BOX_PORT[ssh1_2080ti]=34217;      BOX_HOST[ssh1_2080ti]=ssh1.vast.ai; BOX_GPUMASK[ssh1_2080ti]=""
+BOX_PORT[ssh3_3070]=15229;        BOX_HOST[ssh3_3070]=ssh3.vast.ai;   BOX_GPUMASK[ssh3_3070]=""
+BOX_PORT[ssh6_3080]=16779;        BOX_HOST[ssh6_3080]=ssh6.vast.ai;   BOX_GPUMASK[ssh6_3080]=""
 
 # For shared-host boxes (ssh17637 has 2 slots), the "is busy" check needs to be
 # slot-specific — we check the GPU mem usage on the specific CUDA index.
@@ -66,9 +69,9 @@ pop_next_queue_line() {
   return 0
 }
 
-echo "[autoqueue] $(ts) start — polling 4 boxes every 300s"
+echo "[autoqueue] $(ts) start — polling 6 boxes every 300s"
 while true; do
-  for tag in ssh6_4060 ssh3_3060ti ssh17637_gpu0 ssh17637_gpu1; do
+  for tag in ssh6_4060 ssh17637_gpu0 ssh17637_gpu1 ssh1_2080ti ssh3_3070 ssh6_3080; do
     qf="$QUEUE_DIR/${tag}.queue"
     [[ -f $qf ]] || continue
     if is_box_busy "$tag"; then

@@ -13,10 +13,13 @@ Refresh with: `bash scripts/iter5_dashboard.sh`
 | Box | GPU | VRAM | sps | Stability | Currently running |
 |---|---|---|---|---|---|
 | Local | RTX 4070 Ti | 12GB | ~540 | high | **Phase-z s1-5 (iter 6 Q1, vanilla TD-MPC2 baseline)** |
-| ssh3:11271 | RTX 3060 Ti | 8GB | ~120 | high | **Phase-x s7 (Path 9, NS=2048)** |
-| 78.83.187.54:17637 GPU0 | RTX 3060 Lap | 6GB | ~250 | flaky | **Phase-q s1-5 (iter 6 Q2, knee penalty no Glass)** |
-| 78.83.187.54:17637 GPU1 | RTX 3060 Lap | 6GB | ~250 | flaky | **Phase-y s4 (Path 10 hierarchical)** |
-| ssh6:11115 | RTX 4060 | 8GB | ~540 | high | **Phase-x s8 (Path 9, JUST CROSSED 500: 500.9)** |
+| 78.83.187.54:17637 GPU0 | RTX 3060 Lap | 6GB | ~250 | flaky | **Phase-q s1 / Phase-z s4-5 (iter 6 Q2)** |
+| 78.83.187.54:17637 GPU1 | RTX 3060 Lap | 6GB | ~250 | flaky | **Phase-q s2 / Phase-y s4-5** |
+| ssh6:11115 | RTX 4060 | 8GB | ~540 | high | **Phase-x s8=525 (DONE), Phase-q s3-5 queued** |
+| **ssh1:34217** | **RTX 2080 Ti** | **22GB** | **~384** | TBD | **Phase-q s6 (queued, G2 ceiling)** |
+| **ssh3:15229** | **RTX 3070** | **8GB** | **~445** | TBD | **Phase-q s7 (queued, G2 ceiling)** |
+| **ssh6:16779** | **RTX 3080** | **10GB** | **~329** | TBD | **Phase-q s8 (queued, G2 ceiling)** |
+| ~~ssh3:11271 (3060Ti)~~ | RTX 3060 Ti | 8GB | ~120 | DESTROYED 2026-05-18 | killed |
 | ~~ssh9:16233 (3090)~~ | RTX 3090 | 24GB | — | BLOCKED | driver 535 incompatible |
 
 ## Top-line current results (iter 5 + iter 6 in flight)

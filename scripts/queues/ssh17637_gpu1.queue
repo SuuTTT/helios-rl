@@ -1,2 +1,2 @@
 # 2x3060 GPU1 queue — runs after Phase-q s2 finishes
-17637|78.83.187.54|scripts/run_phasey_seed4_2x3060.sh|SEED=5
+# DONE 16:52:34Z 17637|78.83.187.54|scripts/run_phasey_seed4_2x3060.sh|SEED=5
