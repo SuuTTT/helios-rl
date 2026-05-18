@@ -55,6 +55,7 @@ while true; do
         --include='HopperHop_phasev_2x3060/' --include='HopperHop_phasev_2x3060/**/*.csv' --include='HopperHop_phasev_2x3060/**' \
         --include='HopperHop_phasex_ns1024/' --include='HopperHop_phasex_ns1024/**/*.csv' --include='HopperHop_phasex_ns1024/**' \
         --include='HopperHop_phasey_2x3060/' --include='HopperHop_phasey_2x3060/**/*.csv' --include='HopperHop_phasey_2x3060/**' \
+        --include='HopperHop_phaseq_knee/' --include='HopperHop_phaseq_knee/**/*.csv' --include='HopperHop_phaseq_knee/**' \
         --exclude='**/checkpoints/**' --exclude='**/checkpoints' \
         root@78.83.187.54:/root/helios-rl/exp/tdmpc_glass/ \
         $MIRROR/ssh17637_2x3060/ >/dev/null 2>&1
@@ -69,7 +70,11 @@ while true; do
            $MIRROR/ssh17637_2x3060/HopperHop_phasex_ns1024/seed_5.csv 2>/dev/null)
   besty4=$(awk -F, 'NR>1 && $3=="mppi" {if($2+0>m)m=$2+0} END{printf "%.1f", m}' \
            $MIRROR/ssh17637_2x3060/HopperHop_phasey_2x3060/seed_4.csv 2>/dev/null)
-  echo "[$ts][stream] ssh17637    phasex_x1(dead)=${bestx1:-—}  ns1024_s5=${bestx5:-—}  phasey_s4=${besty4:-—}"
+  bestq=$(for s in 1 2 3 4 5; do
+            awk -F, 'NR>1 && $3=="mppi" {if($2+0>m)m=$2+0} END{if(m>0) printf "s%s=%.1f ", '"$s"', m}' \
+              $MIRROR/ssh17637_2x3060/HopperHop_phaseq_knee/seed_$s.csv 2>/dev/null
+          done)
+  echo "[$ts][stream] ssh17637    phasey_s4=${besty4:-—}  phaseq(knee/no-glass)=${bestq:-—}"
 
   # ssh9_3090 BLOCKED (driver 535 incompatible with our JAX+mujoco_warp stack)
 

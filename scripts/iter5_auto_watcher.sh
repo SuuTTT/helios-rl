@@ -19,7 +19,8 @@ ts() { date -u +%H:%M:%SZ; }
 #   name | port | host | grep_pattern | csv_to_backup | launcher_cmd
 # Before relaunch, the watcher cp's csv_to_backup → csv_to_backup_vN_<ts>.csv on the remote.
 declare -a SLOTS=(
-  "ssh3_phasey_3060ti|11271|ssh3.vast.ai|seed 3.*glass_num_super_clusters|exp/tdmpc_glass/HopperHop_phasey_3060ti/seed_3.csv|SEED=3 nohup setsid bash scripts/run_phasey_3060ti.sh > /tmp/relaunch_phasey_3060ti.log 2>&1 < /dev/null & disown"
+  # ssh3_phasey_3060ti REMOVED — Phase-y queue completed; Phase-x s7 sleeper handed off the box
+  "ssh3_phasex_s7|11271|ssh3.vast.ai|seed 7.*mppi_n_samples 2048|exp/tdmpc_glass/HopperHop_phasex_3060ti/seed_7.csv|nohup setsid bash scripts/sleep_then_phasex_s7_3060ti.sh > /tmp/relaunch_phasex_s7.log 2>&1 < /dev/null & disown"
   "ssh17637_phasex_s5_ns1024|17637|78.83.187.54|seed 5.*mppi_n_samples 1024|exp/tdmpc_glass/HopperHop_phasex_ns1024/seed_5.csv|SEED=5 NS=1024 nohup setsid bash scripts/run_phasex_seed5_ns1024.sh > /tmp/relaunch_phasex_s5.log 2>&1 < /dev/null & disown"
   "ssh17637_phasey_s4|17637|78.83.187.54|seed 4.*glass_num_super_clusters|exp/tdmpc_glass/HopperHop_phasey_2x3060/seed_4.csv|SEED=4 nohup setsid bash scripts/run_phasey_seed4_2x3060.sh > /tmp/relaunch_phasey_s4.log 2>&1 < /dev/null & disown"
   # ssh6_phasex_s4 removed — s4 produced stuck-seed result (peak 15.4), sleeper handles s8 now

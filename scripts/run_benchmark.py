@@ -692,6 +692,12 @@ def train_tdmpc2(
     multi_step = _build_multi_step(_smooth_curr)
 
     # ── MPPI planner (for eval)
+    # Build MPPI planner. Path-7 cluster_obs kwargs only valid for Glass make_mppi_fn,
+    # so only pass them when use_glass=True (vanilla tdmpc2 make_mppi_fn doesn't accept them).
+    _mppi_kw = {}
+    if use_glass:
+        _mppi_kw["use_cluster_obs"] = bool(glass_cfg.get("use_cluster_obs", False))
+        _mppi_kw["cluster_obs_proto_temperature"] = float(glass_cfg.get("proto_temperature", 1.0))
     plan = make_mppi_fn(
         enc_net, dyn_net, rew_net, q_net, pi_net,
         horizon=H, n_samples=NS, num_elites=elites,
@@ -699,8 +705,7 @@ def train_tdmpc2(
         min_std=MIN_STD, max_std=MAX_STD,
         act_low=al, act_high=ah, act_dim=act_dim,
         gamma=gamma, rew_scale=rew_scale,
-        use_cluster_obs=bool(use_glass and glass_cfg.get("use_cluster_obs", False)),
-        cluster_obs_proto_temperature=float(glass_cfg.get("proto_temperature", 1.0)),
+        **_mppi_kw,
     )
     if use_glass:
         glass_diag = make_glass_diag_fn(
@@ -1322,18 +1327,23 @@ def main():
                 elif algo == "sac":
                     train_sac(task, args.total_steps, args.seed, csv_path)
                 elif algo == "tdmpc2":
-                    # tdmpc2 path (no Glass). Supports --latent_action_smooth_coef,
-                    # --consistency_coef, --early_stop_patience — same flags as
-                    # tdmpc-glass for direct ablation comparison.
+                    # tdmpc2 path (no Glass). Iter 6 expanded to support the same
+                    # config space as tdmpc-glass for direct ablation: NS, knee penalty,
+                    # expl_until, latent smoothing, curriculum warmup.
                     train_tdmpc2(
                         task,
                         args.total_steps,
                         args.seed,
                         csv_path,
                         use_glass=False,
+                        mppi_n_samples=args.mppi_n_samples,
                         latent_action_smooth_coef=args.latent_action_smooth_coef,
                         consistency_coef=args.consistency_coef,
                         early_stop_patience=args.early_stop_patience,
+                        latent_smooth_warmup_env_steps=args.latent_smooth_warmup_env_steps,
+                        expl_until=args.expl_until,
+                        knee_penalty_coef=args.knee_penalty_coef,
+                        knee_penalty_threshold=args.knee_penalty_threshold,
                     )
                 elif algo in ("tdmpc-glass", "tdmpc_glass"):
                     q_reset = None
