@@ -45,7 +45,9 @@ while true; do
           $MIRROR/ssh6_4060/HopperHop_phasev_4060/seed_3.csv 2>/dev/null)
   bestx4=$(awk -F, 'NR>1 && $3=="mppi" {if($2+0>m)m=$2+0} END{printf "%.1f", m}' \
            $MIRROR/ssh6_4060/HopperHop_phasex_4060/seed_4.csv 2>/dev/null)
-  echo "[$ts][stream] ssh6_4060   phasep s6=${bestp:-—}  phasev s3=${bestv:-—}  phasex s4(NS=2048)=${bestx4:-—}"
+  bestx8=$(awk -F, 'NR>1 && $3=="mppi" {if($2+0>m)m=$2+0} END{printf "%.1f", m}' \
+           $MIRROR/ssh6_4060/HopperHop_phasex_4060/seed_8.csv 2>/dev/null)
+  echo "[$ts][stream] ssh6_4060   phasep s6=${bestp:-—}  phasev s3=${bestv:-—}  phasex s4=${bestx4:-—} s8=${bestx8:-—}"
 
   # === 2x3060 (78.83.187.54:17637) ===
   rsync -a -e "ssh -p 17637 -o StrictHostKeyChecking=no -o ConnectTimeout=10" \
