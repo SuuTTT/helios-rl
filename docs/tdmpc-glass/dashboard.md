@@ -1,81 +1,120 @@
 # TD-MPC-Glass HopperHop — Live Dashboard
 
-Goal: 5 seeds > 500 MPPI on HopperHop. Beat Phase-1b baseline finals
-`[438, 526, 294, 187, 562]` (mean 401, 3-of-5 > 500).
+**Two goals** (iter 6):
+- **G1 — Consistency**: all 5 seeds > MPPI 500 (we're currently at 2-of-5: s3=523, s8=525)
+- **G2 — Ceiling**: can we break MPPI 600? (Phase-t s2 hit 612 with knee penalty)
+
+Phase-1b baseline finals reference: `[526, 526, 294, 227, 562]`, mean 427, 2/5 > 500.
 
 Refresh with: `bash scripts/iter5_dashboard.sh`
 
-## Hardware fleet
+## Hardware fleet (current)
 
-| Box | GPU | VRAM | Driver | sps | Stability | Notes |
-|---|---|---|---|---|---|---|
-| Local | RTX 4070 Ti | 12GB | 12.4 | ~540 | high | Fastest dev box. Mem 0.85 |
-| ssh3:11271 | RTX 3060 Ti | 8GB | 12.x | ~100 | high | Slow but reliable. Mem 0.55 |
-| ssh6:11115 | RTX 4060 | 8GB | 580 / CUDA 13 | ~540 | high | Mem 0.55. Long-running Phase-p s6 from earlier sesssion |
-| 78.83.187.54:17637 | 2× RTX 3060 Lap | 6GB ea. | 580 / CUDA 13 | ~250 ea. | **flaky** | OOM-killed Phase-v s2 + Phase-x s2 (twice). Use mem 0.35 |
-| ssh9:16233 | RTX 3090 | **24GB** | 535 | — | **BLOCKED** | Driver 535 / CUDA 12.2 incompatible with our JAX+mujoco_warp stack (jax 0.6 needs cuSPARSE 12.6, jax 0.4 missing `jax.tree.map_with_path` used by mujoco_warp). Release or upgrade driver. |
-
-## Phase legend (Iteration 5)
-
-| Phase | Path | What it changes | Hypothesis |
-|---|---|---|---|
-| **Phase-v** | 7 | Concat soft cluster S[n*(z)] (K=8) to z before pi/q. Architectural. | Policy can condition on which gait phase it's in. |
-| **Phase-x** | 9 | NS=512→2048 MPPI samples. **Planner-only.** | Stuck seeds are search-failure, not learning-failure. |
-| **Phase-y** | 10 | Hierarchical Glass: K_sub=8 + K_super=4 joint 2D-SE losses. | K=3 basin cap → need a coarser layer. |
-| **Phase-P/Pa** | dead | Cluster entropy as intrinsic reward (static + decayed). | Non-stationary reward signal killed policy at convergence. |
-
-## Live state (manually updated)
-
-| Phase | Seed | Box | Best MPPI | At step | Status |
+| Box | GPU | VRAM | sps | Stability | Currently running |
 |---|---|---|---|---|---|
-| Phase-v | 1 | local 4070 Ti | **218.0** | 7.5M | done (10M cap) |
-| Phase-v | 2 | local 4070 Ti | 19.9 | 6.5M | **KILLED** — stuck seed, 4h49m wasted |
-| Phase-v | 3 | ssh6 4060 | 232.0 | 5.75M | running |
-| Phase-x | 1 v1 | 2x3060 GPU1 | **453.2** | 4.25M | **OOM-killed** (archived: `seed_1_died_at_4.5M.csv`) |
-| Phase-x | 1 v2 | 2x3060 GPU1 | 278.0 | 2M | running, climbing |
-| Phase-x | 2 v1 | 2x3060 GPU0 | 1.7 | 750k | OOM-killed (status=139) |
-| Phase-x | 2 v2 | 2x3060 GPU0 | 5.8 | 2.75M | OOM-killed again (status=137) |
-| Phase-x | 3 | local 4070 Ti | — | — | just launched |
-| Phase-x | 4 | ssh9 3090 | — | — | TBD |
-| Phase-y | 1 | ssh3 3060Ti | **185.7** | 1.75M | done (early-stop @ 3.25M, patience=1.5M) |
-| Phase-y | 2 | ssh3 3060Ti | TBD | — | running (auto-queued after s1) |
-| Phase-p s6 (legacy) | 6 | ssh6 4060 | 250.9 | 6.25M | older baseline, still climbing |
+| Local | RTX 4070 Ti | 12GB | ~540 | high | **Phase-z s1-5 (iter 6 Q1, vanilla TD-MPC2 baseline)** |
+| ssh3:11271 | RTX 3060 Ti | 8GB | ~120 | high | **Phase-x s7 (Path 9, NS=2048)** |
+| 78.83.187.54:17637 GPU0 | RTX 3060 Lap | 6GB | ~250 | flaky | **Phase-q s1-5 (iter 6 Q2, knee penalty no Glass)** |
+| 78.83.187.54:17637 GPU1 | RTX 3060 Lap | 6GB | ~250 | flaky | **Phase-y s4 (Path 10 hierarchical)** |
+| ssh6:11115 | RTX 4060 | 8GB | ~540 | high | **Phase-x s8 (Path 9, JUST CROSSED 500: 500.9)** |
+| ~~ssh9:16233 (3090)~~ | RTX 3090 | 24GB | — | BLOCKED | driver 535 incompatible |
 
-## Reference trajectory: Phase-p winner s4 → 538
+## Top-line current results (iter 5 + iter 6 in flight)
 
-```
-250k=0.2  500k=7.8  750k=0.0  1.0M=3.7  1.25M=52.7  ← surge starts
-1.5M=114  1.75M=113  2M=2.4 (crash)  2.25M=159  2.75M=230
-3M=163  3.5M=243  3.75M=281  4M=271  4.25M=278  4.5M=344
-5M=312  5.25M=24.1 (crash)  5.5M=347  6M=374  6.25M=373
-6.5M=407  7M=384  7.5M=412  8M=426  8.5M=497  9M=422
-9.5M=500  9.75M=501  10M=538
-```
+| Phase | Seed | Best MPPI | Status |
+|---|---|---|---|
+| **Phase-x s3** (Path 9) | local | **523.5** ✅ | DONE |
+| **Phase-x s8** (Path 9) | 4060 | **524.8** ✅ | running, plateau near s3's level @ 8.75M, expected to end ~10M |
+| Phase-y s3 (Path 10) | 3060Ti | **461.8** | DONE |
+| Phase-x s1 v1 (Path 9) | dead box | 453 | OOM-truncated @ 4.5M, archived |
+| Phase-x s1 v2 (Path 9) | dead box | 380.9 | OOM-killed @ 5.25M |
+| Phase-x s6 (Path 9) | local | 287.3 | DONE |
+| ns1024 s5 (NS=1024 variant) | 2x3060 | 272.7 (v1) | restarted, fresh CSV |
+| Phase-x s9 (Path 9) | local | 234.3 | DONE |
+| Phase-v s3 (Path 7) | 4060 | 232.0 | DONE |
+| Phase-y s2 (Path 10) | 3060Ti | 211.1 | DONE |
+| Phase-v s1 (Path 7) | local | 218.0 | DONE |
+| Phase-y s4 v1 (Path 10) | 2x3060 | 382.9 (lost to relaunch) | rerunning |
+| Phase-y s1 (Path 10) | 3060Ti | 185.7 (overwritten) | data lost |
+| **Phase-x s4** (Path 9) | 4060 | ~15 | stuck-seed DONE |
+| **Phase-v s2** (Path 7) | local | 19.9 | stuck-seed DONE |
+| **Phase-x s2** (Path 9) | dead box | 5.8 | OOM-killed, stuck |
 
-**Pattern**: surge → crash → recover higher → repeat. Multiple deep crashes
-along the way (2M=2.4 trough, 5.25M=24 trough). Don't kill a run just because
-one eval crashed — check 3M-window early-stop.
+**Phase-x (Path 9 NS=2048) seed stats so far** (5+ completed): variance is wide.
+`{523, 501 climbing, 453 partial, 287, 234, 15}` — 2/5 winners, 1/5 stuck, 2/5 mid.
 
-## Iteration-5 lessons so far
+## Phase legend (full iter 1–6)
 
-- §5.1: Phase-v s1 hit 91 then crashed — looked dead, called it too early.
-- §5.2: It oscillates 91 → 1.6 → 94 → 42 → 117 → 145 → 185 → 209 → 218 (final). Crash≠death.
-- §5.3: Phase-v s2 (stuck seed, peak 19.9 over 9.25M): **stuck seeds are exploration-bound,
-  not architecture-bound.** Path 7/9/10 don't help bad basins. Path 4 (BC from winner)
-  needed for the consistent-mean problem.
+See `docs/tdmpc-glass/iteration_6_plan.md §0` for the full ledger of all 23+
+phases. Quick "what works" summary:
 
-## Path falsifications (iteration 5)
+| Intervention | Best | Notes |
+|---|---|---|
+| Knee penalty (Phase-t) | **612** | best — 2/3 > 500 — benchmark-unfair |
+| Glass OFF after 2M (Phase-o) | 577 | hybrid |
+| Smoothing 1e-3 (Phase-f/j) | 572 / 518 | reliable |
+| EXPL_UNTIL=500k (Phase-p) | 538 | helps winners |
+| NS=2048 MPPI (Phase-x) | 523 | reliable winner — Path 9 |
+| Hierarchical Glass (Phase-y) | 462 | close — Path 10 |
 
-- **Path P** (cluster entropy as intrinsic reward, static coef=0.1): single eval peak
-  MPPI=91 at 1.25M, then collapsed to 2.4 at 2M, never recovered. Non-stationary reward.
-- **Path Pa** (Path P + linear decay 0.1→0 over [500k, 3M]): peak 24.9 — **3.6× WORSE
-  than static**. Decay doesn't fix it; coef=0.1 magnitude is inherently incompatible
-  with HopperHop reward scale (max intrinsic per episode ≈ 210 vs target ~600).
+## What to run NEXT (suggestion)
 
-## Pending paths
+### Currently running (let them finish, ~5-10h)
+- **Phase-z** vanilla TD-MPC2 5-seed baseline — Q1 of iter 6
+- **Phase-q** knee penalty no-Glass 5-seed — Q2 of iter 6
+- Phase-x s7, s8 — finish out the Path 9 CI sweep
+- Phase-y s4 (rerunning) — finish out Path 10 sweep
 
-- Path 4 (Phase-s): behaviour cloning from a winner trajectory — **likely needed for stuck-seed rescue**
-- Path 8 (Phase-w): multi-task (HopperHop + HopperStand)
-- Path A: distributional Q (quantile regression) + n-step returns
-- Path B: SAC-style entropy regularization with auto-tuned α
-- Render 7 checkpoints with peak > 450 (blocked by Warp mempool issue on remote)
+### Next priorities once boxes free up
+
+1. **Path 4 (Phase-s): BC from Phase-x s3 (523 winner)** — TOP priority.
+   Per iter 5 §5.3, stuck-seed problem is exploration-bound. BC pre-training
+   transplants the winner's policy into other seeds. Implementation: collect
+   ~5 episodes of inference from `phasex_local/seed_3/checkpoints/best_mppi.pkl`,
+   pre-train pi on (obs, action) pairs for ~10k updates, then continue normal training.
+
+2. **Reward-shaping for Path 9 hybrid** — combine Phase-x (NS=2048) with knee penalty
+   to push past 612 ceiling. Benchmark-unfair but cleanly shows what the algorithm
+   class can do physically.
+
+3. **Stuck-seed checkpoint resume** — fix `run_benchmark.py` to load + APPEND CSV on
+   restart instead of overwriting. Eliminates the trajectory-loss problem we hit
+   ~5 times in iter 5.
+
+### Do NOT run (per ledger §0.2)
+
+- Path P / Pa (intrinsic cluster entropy) — falsified
+- Path 7 (Phase-v cluster-id obs) — falsified
+- Phase 1c (act_noise anneal) — falsified
+- Phase-i (smooth=1e-4), Phase-k (λ_temporal=0.05) — too weak/aggressive
+
+## Iter-6 interpretation pending
+
+We expect Phase-z baseline (5 seeds) result tomorrow. If vanilla TD-MPC2 +
+NS=2048 produces 2-of-5 > 500 (matching Phase-x), then **Glass is neutral**
+(it doesn't help or hurt). If it produces fewer winners, **Glass adds value**.
+If it matches or beats Phase-x, **drop Glass entirely** (the whole research
+project's premise weakens).
+
+Phase-q (knee+no-glass) tells us the physical ceiling. If 3+ of 5 break 600,
+then the answer to "can HopperHop be solved consistently" is YES; the only
+question is whether algorithm-internal tricks (Path 4 BC, etc.) can match
+that ceiling without modifying rewards.
+
+## Core problem statement (from iter 6 plan §2)
+
+> HopperHop has at least two gait basins. Random initial conditions during the
+> 500k EXPL_UNTIL phase determine which basin a seed lands in. Stuck-basin seeds
+> plateau at MPPI 0-300 regardless of any algorithm intervention. The 5-of-5 > 500
+> goal is fundamentally a basin-lottery problem, not a representation/planning
+> problem.
+
+## Backup hygiene reminder
+
+CSVs that got overwritten in iter 5 (lessons learned):
+- Phase-y s4 v1 = 382.9 (lost — watcher relaunch without backup, before watcher v2)
+- Phase-y s1 = 185.7 (lost — watcher's queue-relaunch wiped seed_1 before backup)
+- All others have `_v1_<timestamp>.csv` backups
+
+Watcher v2+ now backs up CSV before any relaunch. Same protection should be
+added to launcher scripts (use `tee -a` not `tee`).

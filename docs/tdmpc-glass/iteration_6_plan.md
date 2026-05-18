@@ -1,5 +1,92 @@
 # Iteration 6 — Pivot: stuck-seed problem is the real bottleneck
 
+## Goals (two distinct success criteria)
+
+| ID | Goal | Current state | Strategy |
+|---|---|---|---|
+| **G1 — Consistency** | All 5 seeds > MPPI 500 (mean > 500, std small) | 2-of-5 (s3=523, s8=525) | Fix the stuck-seed lottery (§7.B soft-reward bundle, §7.C gait penalty) |
+| **G2 — Ceiling** | At least one seed > MPPI 600 | Phase-t s2 = **612** (knee + Glass) | Reward shaping. §6.2 Phase-q (knee + no Glass) measures ceiling sans Glass. §7.E stack combines all winners |
+
+Both goals share the same root cause (basin lottery) but have different
+prescriptions: G1 needs *every* seed to escape bad basins; G2 just needs
+*one* seed to push the upper limit. The §7 experiments target both.
+
+## §0. Complete phase ledger (iter 1 → iter 5)
+
+All HopperHop best-MPPI values we've recorded, sorted by best result per phase:
+
+| Iter | Phase | Feature | Best | Seeds (#>500 / #stuck < 100) |
+|---|---|---|---|---|
+| 4 | **t** (Path 5) | **knee penalty** (reward shaping) | **612** s2 | **2 of 3 > 500** (612, 534, 374); 0 stuck |
+| 3 | **o** (Path 3) | Glass OFF after 2M (hybrid) | 577 s3 | 1 of 3 > 500 (577, 254, 33); 1 stuck |
+| 3 | **f** (Path 2) | latent_action_smooth_coef=0.001 | 571 s1 | 1 of 5 > 500 (572, 284, 262, 266, 255); 0 stuck |
+| 1b | baseline (random) | TD-MPC-Glass default | 562 s5 | 2 of 5 > 500 (562, 526, 526, 294, 227); 0 stuck |
+| 4 | **p** (Path 1) | EXPL_UNTIL=500k | 538 s4 | 1 of 3 > 500 (538, 197, 27); 1 stuck |
+| 5 | **x** (Path 9) | NS=2048 MPPI | 523 s3 | 2 of 6+ > 500 (523, 501, 453 archived, 287, 234, 15, 6); 2 stuck |
+| 3 | j (Path 2 curriculum) | curriculum smoothing | 518 s2 | 1 of 5 > 500 (518, 452, 354, 322, 266) |
+| 3 | h (combined) | smooth + ccoef | 490 s1 | 0 of 2 > 500 (490, 328) |
+| 3 | g | consistency_coef=1.0 | 482 s2 | 0 of 2 > 500 (482, 427) |
+| 5 | y (Path 10) | hierarchical Glass K_sup=4 | 462 s3 | 0 of 3 > 500 (462, 211, 185) |
+| 1c | act_noise anneal | 0.30→0.10 | 412 s3 | 0 of 4; FALSIFIED (hurts winners) |
+| 3 | k | smooth + λ_temporal=0.05 | 292 s1 | 0 of 1; too aggressive |
+| 3 | l_v1 | TD-MPC2 + smoothing (Glass OFF) | 289 s1 | 0 of 1; Glass-OFF hurts |
+| 5 | v (Path 7) | cluster soft-dist as pi/q obs | 232 s3 | 0 of 3 > 500 (232, 218, 19.9); 1 stuck |
+| 3 | i (Path 2 weak) | smooth=1e-4 | 312 s1 | 0 of 1; too weak |
+| 3 | m | basin perturbation | 286 s5 | 0 of 2; doesn't help |
+| 5 | P / Pa | cluster entropy intrinsic reward | 91 / 25 | FALSIFIED — non-stationary |
+| 3 | d_v1 | act_noise=0.40 | 114 | Warp crash at 1M |
+| 3 | d_v2 | H=5 only | 198 | Worse than baseline |
+| 3 | n_v1 | basin perturbation alt | 56 | FALSIFIED |
+
+## §0.1 What WORKS (interventions that produced ≥1 seed > 500)
+
+In order of best per-phase result:
+
+| Intervention | Best | Verdict |
+|---|---|---|
+| **Knee-penalty reward shaping (Phase-t)** | **612** | Most consistent — 2 of 3 > 500. Benchmark-unfair. |
+| Glass OFF after 2M (Phase-o) | 577 | Glass helps early then becomes load |
+| Latent action smoothing 1e-3 (Phase-f, j) | 572, 518 | Stable across iters |
+| EXPL_UNTIL=500k (Phase-p) | 538 | Bigger random phase = wider state coverage |
+| Random baseline 1b | 526, 562 | The seed lottery does work — sometimes |
+| NS=2048 MPPI (Phase-x) | 523 (s3), 501 (s8) | Planner helps when policy is good |
+| Consistency_coef=1.0 (Phase-g) | 482 | Helps but caps below 500 |
+| Hierarchical Glass (Phase-y) | 462 | Close — Path 10 viable extension |
+
+## §0.2 What's FALSIFIED (don't retry)
+
+- **Path P / Pa** — cluster entropy as intrinsic reward: non-stationary, kills convergence
+- **Path 7 (Phase-v)** — cluster soft-dist as observation: doesn't escape basin
+- **Phase 1c** — act_noise anneal 0.30→0.10: hurts winners
+- **Phase-d v1** — noise=0.40: Warp CUDA 901 at ~1M
+- **Phase-e** — Q-reset: implementation bug, masked the test
+- **Phase-i** — smooth=1e-4: too weak
+- **Phase-k** — λ_temporal=0.05: too aggressive
+- **Phase-l** — Glass-OFF entirely (not "after 2M"): hurts
+- **Phase-m, n** — basin perturbation via param noise: doesn't help
+
+## §0.3 Statistical pattern across 23 phases
+
+**Out of all unique algorithm interventions tried:**
+- ~5 produced winners (≥1 seed > 500): smoothing, EXPL_UNTIL=500k, NS=2048, Glass-OFF-late, knee-penalty
+- ~9 produced no winners (peak < 500)
+- ~5 were falsified outright
+
+**No intervention produces 5-of-5 winners** — even knee penalty (best mean we've seen) only hit 2-of-3 > 500.
+
+**Stuck-seed pattern is identical across all interventions**: in any multi-seed
+sweep, 1-of-5 to 2-of-5 seeds plateau at MPPI 0–100. Confirmed across:
+- Phase 1b s4 = 227 (close to stuck), s3 = 294
+- Phase-f s2-s5 mid-range (262-284)
+- Phase-p s5 = 27 (truly stuck), s3 = 197
+- Phase-o s5 = 33, s4 = 254
+- Phase-v s2 = 19.9 (stuck)
+- Phase-x s2 = 5.8, s4 = 15 (stuck)
+- Phase-y s2 = 211 (mid)
+
+This is the **basin lottery problem** described in §2.1.
+
+
 Goal unchanged: 5 HopperHop seeds > MPPI 500. Iteration 5 tried 4 paths (P, 7, 9, 10),
 got 1 clear winner (Phase-x s3 = 523), but failed to consistently reach 500. This
 document pivots based on what we learned.
@@ -69,41 +156,31 @@ This points squarely at **Path 4 (behaviour cloning from a winner)** as the
 necessary intervention. We've been delaying it; iteration 6 makes it the top
 priority.
 
-## §3. Iteration 6 plan
+## §3. Iteration 6 plan — what's running and what's next
 
-### §3.1 Stop iterating on Path 9 / 7 / 10
+### §3.1 Currently running (let finish, don't touch)
 
-We have enough Phase-x data for the 95% CI plot (s3=523, s4=15, s6=287, s7+s8 finishing,
-s9=234). Two more (s7, s8) will give us 5-6 seeds. Don't launch s10+. 
-Path 7 (Phase-v) and Path 10 (Phase-y) are also sufficiently characterised.
+| Box | Phase | What it answers |
+|---|---|---|
+| Local | **Phase-z** (vanilla TD-MPC2, 5 seeds sequential) | Q1 — is Glass helping at all? |
+| ssh3 3060Ti | Phase-x s7 (NS=2048) | one more Path 9 CI point |
+| ssh6 4060 | Phase-x s8 (NS=2048) | currently **524.8** — likely 2nd winner |
+| 2x3060 GPU0 | **Phase-q s1** (knee penalty, no Glass) | Q2 ceiling, seed 1 |
+| 2x3060 GPU1 | **Phase-q s2** (knee penalty, no Glass) | Q2 ceiling, seed 2 |
 
-### §3.2 Top priority: Path 4 (BC from winner — Phase-s)
+### §3.2 Stop / drop
 
-Implementation:
-1. **Collect demonstrations** from Phase-x s3 winner (peak 523).
-   Run inference for ~5 episodes, save (obs, action) pairs. ~5k transitions.
-2. **Pre-train pi via BC** for N updates on the demonstrations. Cross-entropy or MSE loss.
-3. **Continue normal training** from BC-warmed pi.
-4. **Smoke-test on 1 seed first**, then scale to all 5 to see if stuck-seed pattern disappears.
+- **Path 4 (BC)** — DEFERRED per user (2026-05-18). Only env-interaction for now.
+- **Path 9 more seeds** — we have enough variance data (s3=523, s8≈525, s4=15, s6=287, s9=234, s7 finishing).
+- **Path 7 (Phase-v)** — falsified, no new launches.
+- **Path 10 more seeds** — Phase-y s3=462 close-but-not-500 is enough info.
+- **Path A (dist-Q), Path B (SAC entropy), Path 8 (multi-task)** — don't address basin lottery.
 
-**Hypothesis to test**: BC pre-training puts pi in the foot-hop basin from
-the start, breaking the random-init lottery.
+### §3.3 Stuck-seed soft-reset (deferred, secondary)
 
-### §3.3 Secondary: stuck-seed detection + soft reset
-
-Implementation:
-1. Detect "stuck" at e.g. 3M env-steps if best MPPI < 100.
-2. On detection: load checkpoint from a small earlier window (e.g. 1M env-steps),
-   add Gaussian noise to policy params, restart training.
-3. Tests whether stuck seeds can be "kicked" into a different basin without
-   throwing away the dynamics/encoder learning.
-
-### §3.4 Skip / deprioritize
-
-- Path A (distributional Q): bigger lift, doesn't address basin lottery.
-- Path B (SAC entropy): same — doesn't address basin lottery.
-- Path 8 (multi-task): adds complexity without addressing root cause.
-- Path 9 more seeds: diminishing returns, we have variance data.
+If reward-shaping (§7) doesn't fix the 1-in-5 stuck-seed pattern, fall back to:
+detect plateau at 3M (best MPPI < 100), load checkpoint from 1M, perturb pi
+params with Gaussian noise, restart training. Same dynamics/encoder kept.
 
 ## §4. Workflow redesign for 4 GPU fleet
 
@@ -145,59 +222,109 @@ Fix the foot-guns we hit in iter 5:
 - Dashboard updated to show "(dead)", "(running)", "(early-stop)" tags per seed.
 - Snapshots auto-archived to `exp/tdmpc_glass/archive/<phase>/seed_<N>_v<n>.csv` for any restart.
 
-## §6. New experiments (per user, before Path 4)
+## §6. Reference experiments (running now)
 
-Before implementing Path 4 (BC from winner), we need two missing reference points
-to know **what the algorithm is actually adding** and **what's physically achievable**.
+Two missing baselines that tell us **what the algorithm is adding** and **what's
+physically achievable** on this env.
 
-### §6.1 Q1: Vanilla TD-MPC2 baseline (NO Glass) — 5 seeds
+### §6.1 Phase-z — vanilla TD-MPC2 baseline (NO Glass), 5 seeds
 
-We've been iterating on TD-MPC-Glass for many phases without a clean 5-seed
-TD-MPC2 baseline using the same training config (EXPL_UNTIL=500k, NS=2048,
-curriculum smoothing). If vanilla TD-MPC2 already gets 3-of-5 > 500, then
-"Glass is the problem"; if it can't break 300 either, then "Glass is roughly
-neutral and the basin issue is algorithm-agnostic".
+Same training config as Phase-x (NS=2048, EXPL=500k, smooth=1e-3), but `--algos tdmpc2`
+(strips the Glass head). Tells us if Glass is helping, neutral, or hurting.
 
-Launcher: `scripts/run_phasez_baseline_local.sh` (NEW)
-- `--algos tdmpc2` (no `-glass`)
-- `--mppi_n_samples 2048`
-- `--expl_until 500000`
-- `--latent_action_smooth_coef 0.001`
-- `--early_stop_patience 3000000`
-- 5 seeds, 10M cap
+Local 4070 Ti, sequential s1→s5, ~25h. **Launched 2026-05-18 08:19Z.**
 
-### §6.2 Q2: Knee-penalty ceiling — 5 seeds
+### §6.2 Phase-q — knee penalty + vanilla TD-MPC2 ceiling, 5 seeds
 
-Phase-t seed 2 hit 612 (iter 4 §10.x). That was 1 seed, so we don't know if
-it's reliable. Run 5 seeds with knee penalty to measure the practical
-ceiling for HopperHop. Even though this is benchmark-unfair (modifies reward),
-it tells us what the policy class is *physically capable of*.
+Same config as Phase-z + `--knee_penalty_coef 0.1`. Measures practical ceiling
+(benchmark-unfair). Phase-t s2 was 612 with knee + Glass; Phase-q strips Glass.
 
-Launcher: `scripts/run_phaseq_knee_5seed.sh` (NEW, no Glass)
-- `--algos tdmpc2` (no `-glass`)
-- `--knee_penalty_coef 0.1`
-- `--knee_penalty_threshold 0.15`
-- `--mppi_n_samples 2048`
-- Otherwise same as §6.1
+2x3060 GPU0+GPU1 (s1+s2 parallel), then sequential. **Launched 2026-05-18 07:17Z.**
 
 ### §6.3 Interpretation matrix
 
-| Baseline mean | Knee-penalty mean | What it means |
+| Phase-z mean | Phase-q mean | Reading |
 |---|---|---|
-| both <400 | both <400 | Algorithm is the bottleneck — fundamental redesign needed |
-| baseline ~265, knee >500 | reward shaping is the missing ingredient | basin lottery is real, knee penalty cracks it |
-| baseline >500, knee >600 | Glass is HURTING us | drop Glass entirely |
-| baseline ~265, knee ~265 | reward signal isn't enough either | exploration is the bottleneck — Path 4 BC needed |
+| both <400 | both <400 | Algorithm is the bottleneck (need redesign) |
+| z~265, q>500 | reward signal is the missing ingredient | basin lottery is real, shaping cracks it — pursue §7 |
+| z>500, q>600 | Glass is HURTING us | drop Glass entirely |
+| z~265, q~265 | even shaping isn't enough | exploration bottleneck — revisit Path 4 BC |
 
-After §6.1 and §6.2 results, we'll have evidence to either:
-- Continue with Path 4 BC (if exploration is confirmed bottleneck)
-- Drop Glass (if vanilla baseline matches or beats it)
-- Accept reward shaping for the headline number (if knee penalty cracks 600 reliably)
+## §7. Env-only roadmap (condensed)
 
-## §5. Top-line decisions
+**Principle**: focus on robustness (5/5 winners), not peak. **Eval always on original
+reward** — only training reward is shaped. We collapse the 7-priority brainstorm
+into 3 concrete experiments + a stacking experiment.
 
-1. **Stop launching more Phase-x NS=2048 seeds**. Let s7, s8 finish then declare Path 9 done.
-2. **Implement Path 4 (Phase-s BC from winner)** next — top priority for stuck-seed rescue.
-3. **Codify launcher + watcher hygiene** above before any new experiments.
-4. **Don't drop Phase-x as "failed"** — it's our best benchmark-fair result (523 winner), just inconsistent.
-5. **Open question**: is it worth the engineering effort to retrofit run_benchmark.py with checkpoint-resume? Would save many lost trajectories during box-recycle events.
+### §7.A — DONE: diagnostic logging (was §7.1)
+
+Per-eval `full_reward_rate / standing_rate / fall_count / time_to_first_full` logged
+to `seed_N_diag.csv`. Reward-signal-only (env-agnostic, zero training cost).
+Implemented + smoke-tested 2026-05-18. **All new runs auto-capture this.**
+
+After Phase-q s1+s2 + Phase-z s1+s2 evals, we'll have diag data on stuck vs
+winner seeds to inform which §7 lever to pull next.
+
+### §7.B Soft-reward bundle (combines old §7.2 + §7.3 + §7.4 + §7.7)
+
+One Phase-r experiment containing:
+1. **Soft standing tolerance**: `stand_soft = tolerance(height, 0.6→2.0, margin=0.4, long_tail)` — smooth instead of binary cutoff at 0.6 m.
+2. **Speed curriculum**: target_speed ramps 0.5 → 2.0 m/s over training.
+3. **Shaping anneal** (linear): 0–20% steps `r_train = 0.5·orig + 0.25·stand_soft + 0.25·speed_soft`; 20–60% mix; 60–100% pure original. **Eval always original.**
+4. **Early bonus** (last 200 steps of training only): `r_train += 0.05·speed_soft` when timestep < 200 per episode — helps break 700 ceiling.
+
+All four are reward-signal modifications, no buffer changes — relatively cheap
+to implement as a single `compute_shaped_reward(env_step, total_steps, height, speed, base_reward)` function in `run_benchmark.py`. **CLI flag**: `--soft_reward_curriculum` (single switch turns all 4 on).
+
+### §7.C Gait stabilization penalties (combines old §7.6)
+
+Add to training reward only:
+```python
+fall_penalty = -0.1 if height < 0.45 else 0
+action_smooth = -0.005 * mean((a_t - a_{t-1}) ** 2)
+```
+We already have `latent_action_smooth_coef=0.001` on the latent action signal.
+This is the *env-action-space* version which is different. Single CLI flag
+`--gait_penalty` to enable both.
+
+### §7.D Good-state replay (old §7.5)
+
+DEFER. This requires modifying the replay buffer and reset distribution — bigger
+implementation lift than the reward-shaping bundles. Try §7.B and §7.C first.
+If both fail, this becomes the next priority.
+
+### §7.E Stacked best-of-best (combines all winners)
+
+After §7.B/§7.C results land, run **Phase-r-stack**:
+`Glass + NS=2048 + EXPL_UNTIL=500k + curriculum smoothing + soft-reward bundle + gait penalty`.
+
+Stacks everything that has won at least once in iter 1-5. Best shot at 5/5 > 500
+if reward shaping is the missing piece.
+
+### §7.F Experiment ordering
+
+| # | Experiment | When |
+|---|---|---|
+| 1 | Phase-q + Phase-z (running) | Wait for results (~10-25h) |
+| 2 | Phase-r1 = §7.B soft-reward bundle, 3 seeds | Once local frees |
+| 3 | Phase-r2 = §7.C gait penalty, 3 seeds | Parallel on free remote |
+| 4 | Phase-r-stack = §7.E, 5 seeds | After r1+r2 — the headline experiment |
+| 5 | §7.D good-state replay | Only if r1+r2+stack don't hit 5/5 > 500 |
+
+## §8. Top-line decisions (current as of 2026-05-18)
+
+1. **Don't launch more Phase-x / Phase-v / Phase-y seeds** — variance characterised.
+2. **Path 4 BC is DEFERRED** per user — try env-shaping first (§7).
+3. **Wait for Phase-z + Phase-q results** before launching new experiments — the
+   §6.3 interpretation matrix decides which §7 lever to pull.
+4. **§7.A diagnostic logging is DONE & deployed** — every new run carries it. Use
+   the `seed_N_diag.csv` to characterize stuck-vs-winner seeds.
+5. **Next coding work** when local 4070 Ti frees: implement §7.B (soft-reward
+   bundle) as a single `--soft_reward_curriculum` flag. Then §7.C gait penalty.
+6. **Stretch experiment**: §7.E Phase-r-stack combines every winning ingredient
+   ever (smoothing + EXPL=500k + NS=2048 + soft-reward + gait penalty). If this
+   doesn't reach 5/5 > 500, the basin lottery is genuinely unsolvable without
+   demonstration data (and we'd revisit Path 4 BC).
+7. **Outstanding hygiene gap**: checkpoint-resume for `run_benchmark.py` is still
+   missing. Every box-recycle event loses ~1-2M env-steps of training. Worth
+   ~half a day of engineering when we have a calm window.
