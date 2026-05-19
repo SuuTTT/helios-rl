@@ -44,7 +44,29 @@ BOXES = [
     ("ssh1_2080ti",   34217,   "ssh1.vast.ai",   0, "ssh1:34217 2080 Ti (22GB)"),
     ("ssh3_3070",     15229,   "ssh3.vast.ai",   0, "ssh3:15229 3070 (8GB)"),
     ("ssh6_3080",     16779,   "ssh6.vast.ai",   0, "ssh6:16779 3080 (10GB)"),
+    ("ssh3_3060ti",   11271,   "ssh3.vast.ai",   0, "ssh3:11271 3060Ti (8GB)"),
 ]
+
+
+def parse_etime_seconds(etime: str) -> int | None:
+    """Parse `ps -o etime` formats: MM:SS, HH:MM:SS, D-HH:MM:SS. Returns seconds or None."""
+    if not etime:
+        return None
+    try:
+        days = 0
+        if "-" in etime:
+            d, etime = etime.split("-", 1)
+            days = int(d)
+        parts = [int(p) for p in etime.split(":")]
+        if len(parts) == 2:
+            h, m, s = 0, parts[0], parts[1]
+        elif len(parts) == 3:
+            h, m, s = parts
+        else:
+            return None
+        return days * 86400 + h * 3600 + m * 60 + s
+    except (ValueError, IndexError):
+        return None
 
 # Remote shell snippet — returns one-line ASCII parsable by parse_box_status.
 # For each running run_benchmark PID, also reads TDMPC_GLASS_OUTPUT_TAG from
@@ -441,6 +463,16 @@ def api_boxes():
                 p["phase"] = None
                 p["best_mppi"] = p["last_mppi"] = None
                 p["best_step"] = p["last_step"] = None
+            # Approximate live SPS = last_step / (etime - JIT_warmup). Underestimates
+            # at short runs while JIT dominates; settles to true sps by ~1M env steps.
+            et = parse_etime_seconds(p.get("etime", ""))
+            last_step = p.get("last_step")
+            if et and et > 60 and last_step and last_step > 0:
+                JIT_WARMUP_S = 60  # rough; varies 35-160s by box
+                effective = max(et - JIT_WARMUP_S, 1)
+                p["sps_avg"] = int(last_step / effective)
+            else:
+                p["sps_avg"] = None
         boxes.append({"tag": tag, "label": label, "host": host, "port": port,
                       "gpu_idx": gpu_idx, **info})
     # active_keys = set of (phase, seed) tuples currently running anywhere
@@ -660,7 +692,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
   <section><h2>Box Fleet <button class="refresh-btn" onclick="loadBoxes()">&#x21bb; refresh</button></h2>
     <table id="boxes"><thead>
-      <tr><th>Tag</th><th>Label</th><th>GPU</th><th>Mem</th><th>CPU</th><th>Running (phase · seed · best · last)</th></tr>
+      <tr><th>Tag</th><th>Label</th><th>GPU</th><th>Mem</th><th>CPU</th><th>SPS</th><th>Running (phase · seed · best · last)</th></tr>
     </thead><tbody></tbody></table>
   </section>
 
@@ -730,12 +762,16 @@ function loadBoxes(){
           <div class="small" style="opacity:.7">PID ${p.pid} · ${p.etime} · ${p.algo} NS=${p.ns} ${tag}</div>
         </div>`;
       }).join('') || '<span class="small">(idle)</span>';
+      // SPS: take max across procs (mostly there's one), or '—' if none reported
+      const spsVals = (b.procs||[]).map(p=>p.sps_avg).filter(v=>v!=null);
+      const sps = spsVals.length ? Math.max(...spsVals) : null;
       tr.innerHTML = `
         <td class="mono ${ok?'':'box-bad'}">${b.tag}</td>
         <td>${b.label}${ok?'':'<span class="small box-bad"> · unreachable</span>'}</td>
         <td>${gpuUtil==null?'—':`<span class="util-bar ${hotG?'hot':''}"><span style="width:${gpuUtil}%"></span></span>${gpuUtil}%`}</td>
         <td>${memPct==null?'—':`<span class="util-bar ${hotM?'hot':''}"><span style="width:${memPct}%"></span></span>${b.mem_used}/${b.mem_total} MiB`}</td>
         <td>${b.cpu_util==null?'—':b.cpu_util+'%'}</td>
+        <td class="mono">${sps==null?'<span class="small">—</span>':sps+'/s'}</td>
         <td>${procHTML}</td>
       `;
       tbody.appendChild(tr);

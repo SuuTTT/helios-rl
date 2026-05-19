@@ -494,6 +494,14 @@ def train_tdmpc2(
     cluster_intrinsic_coef: float = 0.0,
     cluster_intrinsic_window: int = 20,
     cluster_intrinsic_decay_steps: int = 0,
+    # iter-6 §7.C — Phase-r2 gait penalty bundle
+    gait_fall_penalty: float = 0.0,
+    gait_fall_height: float = 0.45,
+    gait_action_smooth: float = 0.0,
+    # iter-6 §7.B — Phase-r1 soft-reward bundle
+    soft_stand_bonus: float = 0.0,
+    soft_stand_floor: float = 0.4,
+    soft_anneal_steps: int = 0,
 ) -> None:
     """Train TD-MPC2 or TD-MPC-Glass."""
     algo_name = "TD-MPC-Glass" if use_glass else "TD-MPC2"
@@ -762,6 +770,38 @@ def train_tdmpc2(
     if _knee_pen_coef > 0:
         print(f"  Knee penalty active: coef={_knee_pen_coef} threshold={_knee_pen_thr}", flush=True)
 
+    # iter-6 §7.C — Phase-r2 gait penalty + iter-6 §7.B — Phase-r1 soft-reward bundle.
+    # Both shape the training reward only; eval reward stays the original task reward.
+    # Height = torso_z - foot_z, computed off the inner Hopper env's body ids
+    # (wrappers forward attribute access to the inner env).
+    _gait_fall_coef = float(gait_fall_penalty)
+    _gait_fall_h = float(gait_fall_height)
+    _gait_smooth_coef = float(gait_action_smooth)
+    _soft_bonus = float(soft_stand_bonus)
+    _soft_floor = float(soft_stand_floor)
+    _soft_anneal = int(soft_anneal_steps)
+    _need_height = (_gait_fall_coef > 0 or _soft_bonus > 0)
+    _torso_id = getattr(env, "_torso_id", None)
+    _foot_id = getattr(env, "_foot_id", None)
+    if _need_height and (_torso_id is None or _foot_id is None):
+        print(f"  [warn] gait/soft-reward needs _torso_id/_foot_id from env; got "
+              f"torso={_torso_id} foot={_foot_id}, disabling", flush=True)
+        _gait_fall_coef = 0.0
+        _soft_bonus = 0.0
+        _need_height = False
+    @jax.jit
+    def _height_per_env(state):
+        if _torso_id is None or _foot_id is None:
+            return jnp.zeros(state.data.xipos.shape[0])
+        return state.data.xipos[..., _torso_id, 2] - state.data.xipos[..., _foot_id, 2]
+    if _gait_fall_coef > 0 or _gait_smooth_coef > 0:
+        print(f"  Phase-r2 gait penalty active: fall_coef={_gait_fall_coef} h<{_gait_fall_h} "
+              f"action_smooth={_gait_smooth_coef}", flush=True)
+    if _soft_bonus > 0:
+        print(f"  Phase-r1 soft-reward bundle: stand_bonus={_soft_bonus} floor={_soft_floor} "
+              f"anneal_steps={_soft_anneal} (linear fade 1->0)", flush=True)
+    _prev_acts = None  # populated on first step
+
     # Path P / Phase-P — cluster-entropy intrinsic reward (benchmark-fair).
     # Compute current Glass cluster id per env, maintain ring buffer of last W,
     # add coef * entropy(window) to training reward. Encourages gait diversity
@@ -1026,6 +1066,33 @@ def train_tdmpc2(
             if _knee_pen_coef > 0:
                 pen_np = np.array(knee_penalty_fn(env_state))
                 rews_np = rews_np - _knee_pen_coef * pen_np
+            # iter-6 §7.C — Phase-r2 gait penalty (training reward only)
+            #     fall_penalty: -coef when height < gait_fall_height
+            #     action_smooth: -coef * mean((a_t - a_{t-1})**2) per env
+            # iter-6 §7.B — Phase-r1 soft-reward bundle (training reward only)
+            #     stand_bonus: +coef * clip((h - floor)/(STAND_H - floor), 0, 1)
+            #     weight linearly anneals 1.0 -> 0.0 over [0, soft_anneal_steps]
+            _h_np_cache = None
+            if _gait_fall_coef > 0:
+                _h_np_cache = np.array(_height_per_env(env_state))
+                rews_np = rews_np - _gait_fall_coef * (_h_np_cache < _gait_fall_h).astype(np.float32)
+            if _gait_smooth_coef > 0:
+                if _prev_acts is None:
+                    _prev_acts = np.zeros_like(acts_np)
+                da_sq = np.mean((acts_np - _prev_acts) ** 2, axis=-1)
+                rews_np = rews_np - _gait_smooth_coef * da_sq
+            if _soft_bonus > 0:
+                _soft_weight = 1.0
+                if _soft_anneal > 0:
+                    _soft_weight = max(0.0, 1.0 - env_steps / _soft_anneal)
+                if _soft_weight > 0:
+                    if _h_np_cache is None:
+                        _h_np_cache = np.array(_height_per_env(env_state))
+                    _STAND_H = 0.6
+                    bonus = np.clip((_h_np_cache - _soft_floor) / max(_STAND_H - _soft_floor, 1e-6), 0.0, 1.0)
+                    rews_np = rews_np + _soft_bonus * _soft_weight * bonus
+            if _gait_smooth_coef > 0:
+                _prev_acts = acts_np.copy()
             # Path P / Phase-P — cluster-entropy intrinsic reward (training only).
             # Phase-Pa: linearly decay coef to 0 over [_cluster_decay_start, _cluster_decay_steps]
             # so intrinsic is an exploration curriculum, not a permanent reward distortion.
@@ -1319,6 +1386,25 @@ def parse_args():
                          "Eval reward is unmodified. Try 0.1 for HopperHop.")
     ap.add_argument("--knee_penalty_threshold", type=float, default=0.15,
                     help="Z-coordinate threshold (m) below which non-foot geoms incur penalty. Default 0.15.")
+    # iter-6 §7.C — Phase-r2 gait penalty bundle
+    ap.add_argument("--gait_fall_penalty", type=float, default=0.0,
+                    help="Phase-r2: subtract this from training reward each step when torso-foot "
+                         "height < --gait_fall_height. Try 0.1.")
+    ap.add_argument("--gait_fall_height", type=float, default=0.45,
+                    help="Phase-r2: height threshold (m) below which fall penalty fires. Default 0.45.")
+    ap.add_argument("--gait_action_smooth", type=float, default=0.0,
+                    help="Phase-r2: subtract coef * mean((a_t - a_{t-1})**2) per env from training reward. "
+                         "Encourages smooth env-space actions. Try 0.005.")
+    # iter-6 §7.B — Phase-r1 soft-reward bundle (v1 = stand_bonus + linear anneal only;
+    # speed curriculum + early bonus deferred to v2)
+    ap.add_argument("--soft_stand_bonus", type=float, default=0.0,
+                    help="Phase-r1: add coef * clip((h - floor)/(0.6 - floor), 0, 1) to training reward. "
+                         "Smooth standing bonus that ramps in below the binary 0.6 m cutoff. Try 0.1.")
+    ap.add_argument("--soft_stand_floor", type=float, default=0.4,
+                    help="Phase-r1: height (m) at which stand_bonus begins to ramp up. Default 0.4.")
+    ap.add_argument("--soft_anneal_steps", type=int, default=0,
+                    help="Phase-r1: linearly fade --soft_stand_bonus weight from 1.0 -> 0.0 over [0, N] "
+                         "env steps so the shaping disappears mid-training. 0 = no fade (full bonus all run).")
     # Path P / Phase-P — cluster-entropy intrinsic reward (benchmark-fair, no env modification).
     ap.add_argument("--cluster_intrinsic_coef", type=float, default=0.0,
                     help="Path P: add coef * entropy(last W cluster ids) to training reward. Encourages "
@@ -1400,6 +1486,12 @@ def main():
                         expl_until=args.expl_until,
                         knee_penalty_coef=args.knee_penalty_coef,
                         knee_penalty_threshold=args.knee_penalty_threshold,
+                        gait_fall_penalty=args.gait_fall_penalty,
+                        gait_fall_height=args.gait_fall_height,
+                        gait_action_smooth=args.gait_action_smooth,
+                        soft_stand_bonus=args.soft_stand_bonus,
+                        soft_stand_floor=args.soft_stand_floor,
+                        soft_anneal_steps=args.soft_anneal_steps,
                     )
                 elif algo in ("tdmpc-glass", "tdmpc_glass"):
                     q_reset = None
@@ -1431,6 +1523,12 @@ def main():
                         cluster_intrinsic_coef=args.cluster_intrinsic_coef,
                         cluster_intrinsic_window=args.cluster_intrinsic_window,
                         cluster_intrinsic_decay_steps=args.cluster_intrinsic_decay_steps,
+                        gait_fall_penalty=args.gait_fall_penalty,
+                        gait_fall_height=args.gait_fall_height,
+                        gait_action_smooth=args.gait_action_smooth,
+                        soft_stand_bonus=args.soft_stand_bonus,
+                        soft_stand_floor=args.soft_stand_floor,
+                        soft_anneal_steps=args.soft_anneal_steps,
                     )
                 else:
                     print(f"Unknown algo: {algo}", flush=True)

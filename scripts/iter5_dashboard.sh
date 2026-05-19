@@ -25,6 +25,7 @@ BOXES=(
   "ssh1_2080ti|34217|ssh1.vast.ai|0|ssh1:34217 2080 Ti (22GB)"
   "ssh3_3070|15229|ssh3.vast.ai|0|ssh3:15229 3070 (8GB)"
   "ssh6_3080|16779|ssh6.vast.ai|0|ssh6:16779 3080 (10GB)"
+  "ssh3_3060ti|11271|ssh3.vast.ai|0|ssh3:11271 3060Ti (8GB)"
 )
 
 # ─── helpers run remotely via SSH. Single quoted -> sent as-is. ─────────

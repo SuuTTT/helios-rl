@@ -1,3 +1,5 @@
 # ssh1 RTX 2080 Ti 22GB queue — Phase-q knee penalty extra seeds (G2 ceiling sweep)
 # 384 sps confirmed 2026-05-18
 # DONE 17:08:04Z 34217|ssh1.vast.ai|scripts/run_phaseq_knee_5seed.sh|SEEDS=6 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75
+# 2026-05-19: r2 s2 next
+# DONE 02:19:28Z 34217|ssh1.vast.ai|scripts/run_phaser2_gait.sh|SEEDS=2 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75

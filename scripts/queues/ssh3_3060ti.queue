@@ -1,1 +1,4 @@
-# 3060Ti DESTROYED 2026-05-18 — autoqueue should skip this box
+# ssh3:11271 RTX 3060Ti 8GB — RE-ADDED 2026-05-19 (different physical instance,
+# driver 580, Py 3.12). The old ssh3:11271 3060Ti was destroyed 2026-05-18; this
+# is a fresh box at the same port. slow (~120 sps) — use for parallel r1 seeds.
+# DONE 06:04:00Z 11271|ssh3.vast.ai|scripts/run_phaser1_soft.sh|SEEDS=4 XLA_PYTHON_CLIENT_MEM_FRACTION=0.55

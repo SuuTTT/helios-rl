@@ -3,3 +3,5 @@
 # DONE 15:55:57Z 17637|78.83.187.54|scripts/run_phasez_seed_2x3060_gpu0.sh|SEED=5
 # Phase-z s5 ended 22:41 SIGKILL @ 7.28M (best=342). G2 ceiling sweep continues.
 # DONE 22:50:43Z 17637|78.83.187.54|scripts/run_phaseq_knee_5seed.sh|SEEDS=10 CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_MEM_FRACTION=0.35
+# 2026-05-19: s10 still running; queue r1 s2 for after
+# DONE 01:47:09Z 17637|78.83.187.54|scripts/run_phaser1_soft.sh|SEEDS=2 CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_MEM_FRACTION=0.35

@@ -163,10 +163,29 @@ priority.
 | Box | Phase | What it answers |
 |---|---|---|
 | Local | **Phase-z** (vanilla TD-MPC2, 5 seeds sequential) | Q1 — is Glass helping at all? |
-| ssh3 3060Ti | Phase-x s7 (NS=2048) | one more Path 9 CI point |
-| ssh6 4060 | Phase-x s8 (NS=2048) | currently **524.8** — likely 2nd winner |
-| 2x3060 GPU0 | **Phase-q s1** (knee penalty, no Glass) | Q2 ceiling, seed 1 |
-| 2x3060 GPU1 | **Phase-q s2** (knee penalty, no Glass) | Q2 ceiling, seed 2 |
+| ssh6 4060 | Phase-q s5 (knee penalty, no Glass) | Q2 ceiling sweep |
+| ssh1 2080Ti | Phase-q s6 | Q2 ceiling sweep |
+| ssh3 3070 | Phase-q s12 | Q2 ceiling sweep |
+| ssh6 3080 | Phase-q s11 | Q2 ceiling sweep |
+| 2x3060 GPU0 | Phase-q s10 | Q2 ceiling sweep |
+| 2x3060 GPU1 | Phase-q s9 | Q2 ceiling sweep |
+
+**Phase-q sweep tally (11 seeds run, 2/11 G1 winners as of 2026-05-19 01:00Z)**:
+s1=269, s2=303, s5=343, s6=270, s7=**510** ✓, s8=**529** ✓, s9=263 (still climbing), s10=242, s11=187, s12≈1 (early).
+No seed broke 600 → knee penalty alone doesn't replicate Phase-t s2's 612 — Glass+knee was the surge combination, not knee alone. Sweep was over-allocated (target was 5 seeds; doubled to 11). No further phaseq seeds will be queued — boxes flip to r1/r2 on idle.
+
+### §3.1b Queued next (r1 / r2, will auto-launch when their box frees up)
+
+| Box | Next | What it answers |
+|---|---|---|
+| ssh6 4060 | **Phase-r2 s1** (gait penalty: fall + action-smooth) | §7.C |
+| ssh1 2080Ti | Phase-r2 s2 | §7.C |
+| ssh6 3080 | Phase-r2 s3 | §7.C |
+| ssh3 3070 | **Phase-r1 s1** (soft-reward: stand_bonus + anneal) | §7.B v1 |
+| 2x3060 GPU0 | Phase-r1 s2 | §7.B v1 |
+| 2x3060 GPU1 | Phase-r1 s3 | §7.B v1 |
+
+r1/r2 implementations landed 2026-05-19 in `run_benchmark.py`. Phase-r1 v1 is the cheap two of §7.B (stand_bonus + linear-anneal); speed_curriculum and last-200-step early bonus deferred to v2. Phase-r2 is the full §7.C (fall_penalty + action_smooth).
 
 ### §3.2 Stop / drop
 

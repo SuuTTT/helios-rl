@@ -2,4 +2,5 @@
 # DONE 16:52:34Z 17637|78.83.187.54|scripts/run_phasey_seed4_2x3060.sh|SEED=5
 # Phase-y s5 finished 19:10 (best MPPI 264), G2 ceiling sweep continues w/ Phase-q s9
 # DONE 20:06:18Z 17637|78.83.187.54|scripts/run_phaseq_knee_5seed.sh|SEEDS=9 CUDA_VISIBLE_DEVICES=1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 (launcher not synced on remote, requeued after rsync)
-17637|78.83.187.54|scripts/run_phaseq_knee_5seed.sh|SEEDS=9 CUDA_VISIBLE_DEVICES=1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.35
+# 2026-05-19: dropping duplicate s9 line (s9 is already running via direct launch); queue r1 s3 for after s9 finishes
+# DONE 03:18:45Z 17637|78.83.187.54|scripts/run_phaser1_soft.sh|SEEDS=3 CUDA_VISIBLE_DEVICES=1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.35
