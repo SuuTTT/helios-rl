@@ -1,3 +1,3 @@
 # refilled 2026-05-18: prior s3/s4 lines got marked DONE during the smoothing_enabled crash bug
-11115|ssh6.vast.ai|scripts/run_phaseq_seed3_4060.sh|SEED=3
+# DONE 01:15:29Z 11115|ssh6.vast.ai|scripts/run_phaseq_seed3_4060.sh|SEED=3
 11115|ssh6.vast.ai|scripts/run_phaseq_seed3_4060.sh|SEED=4

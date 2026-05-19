@@ -32,6 +32,7 @@ LOCAL_EXP = REPO / "exp" / "tdmpc_glass"
 MIRROR = LOCAL_EXP / "remote_mirror"
 VIDEO_OUT = REPO / "exp" / "tdmpc_glass" / "rollout_videos"
 VIDEO_OUT.mkdir(parents=True, exist_ok=True)
+EXISTING_VIDEOS_ROOT = REPO / "exp" / "tdmpc_glass" / "videos"
 
 # ─── Box registry. Mirrors scripts/iter5_dashboard.sh BOXES. ────────────
 BOXES = [
@@ -45,28 +46,36 @@ BOXES = [
     ("ssh6_3080",     16779,   "ssh6.vast.ai",   0, "ssh6:16779 3080 (10GB)"),
 ]
 
-# Remote shell snippet — returns one-line JSON-like ASCII parsable by parse_box_status.
-# Kept tiny: SSH transports it inline. Avoids needing python on the remote.
-REMOTE_PROBE = (
-    'gpu_idx="$1"; '
-    'proc=$(ps -eo pid,etime,cmd --no-headers 2>/dev/null '
-    '| grep -E "run_benchmark" | grep -v grep '
-    '| awk \'{cmd=""; for(i=3;i<=NF;i++) cmd=cmd" "$i; printf "%s|%s|%s\\n", $1, $2, cmd}\'); '
-    'gpu=$(nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total '
-    '--format=csv,noheader,nounits -i "$gpu_idx" 2>/dev/null | head -1); '
-    'cpu=$(top -bn1 2>/dev/null | grep -E "^%Cpu" | head -1 '
-    '| awk \'{printf "%.0f", 100-$8}\'); '
-    'printf "GPU=%s\\nCPU=%s\\n%s\\n" "$gpu" "$cpu" "$proc"'
-)
+# Remote shell snippet — returns one-line ASCII parsable by parse_box_status.
+# For each running run_benchmark PID, also reads TDMPC_GLASS_OUTPUT_TAG from
+# /proc/<pid>/environ so the host can pin the proc to the right phase CSV.
+REMOTE_PROBE = r'''
+gpu_idx="$1"
+gpu=$(nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total \
+      --format=csv,noheader,nounits -i "$gpu_idx" 2>/dev/null | head -1)
+cpu=$(top -bn1 2>/dev/null | grep -E "^%Cpu" | head -1 | awk '{printf "%.0f", 100-$8}')
+printf "GPU=%s\nCPU=%s\n" "$gpu" "$cpu"
+ps -eo pid,etime,cmd --no-headers 2>/dev/null | grep -E "run_benchmark" | grep -v grep \
+  | awk '{cmd=""; for(i=3;i<=NF;i++) cmd=cmd" "$i; printf "%s\t%s\t%s\n", $1, $2, cmd}' \
+  | while IFS=$'\t' read -r pid etime cmd; do
+    tag=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
+          | awk -F= '$1=="TDMPC_GLASS_OUTPUT_TAG"{print $2; exit}')
+    cuda=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
+          | awk -F= '$1=="CUDA_VISIBLE_DEVICES"{print $2; exit}')
+    printf "PROC|%s|%s|%s|%s|%s\n" "$pid" "$etime" "$tag" "$cuda" "$cmd"
+  done
+'''
 
 
 def parse_box_status(raw: str):
-    """Parse REMOTE_PROBE output into dict."""
+    """Parse REMOTE_PROBE output. Proc lines look like:
+       PROC|<pid>|<etime>|<output_tag>|<full_cmd_line>
+    """
     gpu_util = mem_used = mem_total = None
     cpu_util = None
     procs = []
     for line in raw.splitlines():
-        line = line.strip()
+        line = line.rstrip()
         if line.startswith("GPU="):
             v = line[4:].strip()
             parts = [x.strip() for x in v.split(",")]
@@ -82,26 +91,28 @@ def parse_box_status(raw: str):
                 cpu_util = int(line[4:].strip())
             except Exception:
                 pass
-        elif "|" in line:
+        elif line.startswith("PROC|"):
             try:
-                pid, etime, cmd = line.split("|", 2)
+                _, pid, etime, output_tag, cuda, cmd = line.split("|", 5)
                 m_seed = re.search(r"--seed\s+(\S+)", cmd)
                 m_ns = re.search(r"--mppi_n_samples\s+(\S+)", cmd)
                 m_algo = re.search(r"--algos\s+(\S+)", cmd)
-                m_tag = []
+                tags = []
                 if "--knee_penalty_coef" in cmd:
-                    m_tag.append("knee")
+                    tags.append("knee")
                 if "--use_cluster_obs" in cmd:
-                    m_tag.append("cobs")
+                    tags.append("cobs")
                 if "--glass_num_super_clusters" in cmd:
-                    m_tag.append("hier")
+                    tags.append("hier")
                 procs.append({
                     "pid": pid.strip(),
                     "etime": etime.strip(),
                     "seed": m_seed.group(1) if m_seed else "?",
                     "ns": m_ns.group(1) if m_ns else "512",
                     "algo": m_algo.group(1) if m_algo else "?",
-                    "tag": "+".join(m_tag) if m_tag else "",
+                    "tag": "+".join(tags) if tags else "",
+                    "output_tag": (output_tag or "").strip(),
+                    "cuda_visible": (cuda or "").strip(),
                 })
             except Exception:
                 pass
@@ -155,8 +166,8 @@ def discover_csvs():
             st = csv_path.stat()
         except OSError:
             continue
-        if st.st_size < 100:
-            continue
+        if st.st_size < 30:
+            continue  # < 30 bytes = header only or smaller
         if time.time() - st.st_mtime > 7 * 86400:
             continue
         phase_dir = csv_path.parent.name.replace("HopperHop_", "")
@@ -195,6 +206,52 @@ def read_curve(csv_path):
     return points
 
 
+def best_and_last(csv_path):
+    """Return (best_mppi, best_step, last_mppi, last_step) for a phase-seed CSV.
+    All -1.0 if no mppi rows present."""
+    best = -1.0
+    best_step = -1
+    last = -1.0
+    last_step = -1
+    try:
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get("eval_type") != "mppi":
+                    continue
+                try:
+                    r = float(row.get("reward", 0))
+                    s = int(float(row.get("step", 0)))
+                except (ValueError, TypeError):
+                    continue
+                if r > best:
+                    best = r
+                    best_step = s
+                last = r
+                last_step = s
+    except Exception:
+        pass
+    return best, best_step, last, last_step
+
+
+def find_active_csv_for(box: str, seed: str):
+    """Locate the per-box CSV for a given seed that's actively being written.
+
+    Strategy: look at the deduped CSV list (discover_csvs already filters to
+    last 7 days). Prefer entries whose mirror box matches; fall back to the
+    local exp tree. Return the freshest match, or None.
+    """
+    if not seed:
+        return None
+    matches = [c for c in discover_csvs()
+               if c["seed"] == str(seed) and (c["box"] == box or box == "local")]
+    if not matches:
+        return None
+    # most recently modified wins
+    matches.sort(key=lambda r: r["mtime"], reverse=True)
+    return matches[0]
+
+
 # ─── Render jobs ──────────────────────────────────────────────────────────
 
 JOBS: dict[str, dict] = {}
@@ -206,6 +263,49 @@ def find_best_ckpt(phase: str, seed: str):
     candidates = list(LOCAL_EXP.rglob(f"HopperHop_{phase}/seed_{seed}/checkpoints/best_mppi.pkl"))
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return candidates[0] if candidates else None
+
+
+_VIDEO_NAME_PAT = re.compile(r"seed_?(\d+)", re.I)
+
+
+def discover_existing_videos():
+    """Scan exp/tdmpc_glass/videos/<phase>/*.mp4 + rollout_videos/<job>.mp4.
+
+    Maps to {(phase, seed): [{label, url, mtime}, ...]} for in-place display
+    on the dashboard. Phase comes from the directory name. Seed is extracted
+    from the filename (e.g., 'seed_1_best_mppi_small.mp4' or 'seed3_x.mp4').
+    """
+    by_key: dict[tuple, list] = {}
+    if EXISTING_VIDEOS_ROOT.exists():
+        for mp4 in EXISTING_VIDEOS_ROOT.rglob("*.mp4"):
+            try:
+                rel = mp4.relative_to(EXISTING_VIDEOS_ROOT)
+            except ValueError:
+                continue
+            parts = rel.parts
+            if len(parts) < 2:
+                continue
+            phase = parts[0]
+            m = _VIDEO_NAME_PAT.search(mp4.stem)
+            if not m:
+                continue
+            seed = m.group(1)
+            try:
+                st = mp4.stat()
+            except OSError:
+                continue
+            by_key.setdefault((phase, seed), []).append({
+                "label": mp4.stem,
+                "url": "/exp_videos/" + "/".join(parts),
+                "mtime": st.st_mtime,
+                "size_mb": round(st.st_size / 1e6, 1),
+                "source": "archive",
+            })
+    # Also surface rollout_videos/ produced by this dashboard, keyed via JOBS.
+    # Those are already accessible via /videos/<id>.mp4 from render jobs.
+    for lst in by_key.values():
+        lst.sort(key=lambda v: v["mtime"], reverse=True)
+    return by_key
 
 
 def render_worker(job_id: str, ckpt: str, env_id: str, camera: str,
@@ -280,11 +380,74 @@ def api_boxes():
         threads.append(t)
     for t in threads:
         t.join(timeout=20)
+    # Compute CSV index once so we annotate every proc against the same snapshot.
+    csv_index = discover_csvs()
+    # Index by (phase, seed) and (box, phase, seed) for fast lookups.
+    by_phase_seed = {(c["phase"], c["seed"]): c for c in csv_index}
+    by_box_phase_seed = {(c["box"], c["phase"], c["seed"]): c for c in csv_index}
     for tag, port, host, gpu_idx, label in BOXES:
         info = results.get(tag, {"reachable": False, "error": "no-result", "procs": []})
+        # If this is a slot on a multi-GPU box, drop procs that aren't pinned to
+        # this CUDA index. (Single-GPU boxes have cuda_visible='' for both, which
+        # we keep — no filtering.)
+        if any(p.get("cuda_visible") for p in info.get("procs", [])):
+            info["procs"] = [p for p in info["procs"]
+                             if p.get("cuda_visible", "") == str(gpu_idx)
+                             or not p.get("cuda_visible")]
+        # Dedupe: if two procs share (seed, output_tag), keep the longer-running
+        # one and surface dup_count so the UI can flag it.
+        deduped = {}
+        for p in info.get("procs", []):
+            key = (p.get("seed"), p.get("output_tag"))
+            prev = deduped.get(key)
+            if prev is None or len(p.get("etime", "")) > len(prev.get("etime", "")):
+                if prev is not None:
+                    p["dup_count"] = prev.get("dup_count", 1) + 1
+                else:
+                    p["dup_count"] = 1
+                deduped[key] = p
+            else:
+                prev["dup_count"] = prev.get("dup_count", 1) + 1
+        info["procs"] = list(deduped.values())
+        for p in info.get("procs", []):
+            seed = p.get("seed", "?")
+            phase_from_env = p.get("output_tag") or ""
+            picked = None
+            # Best-effort phase resolution: prefer TDMPC_GLASS_OUTPUT_TAG from
+            # /proc/<pid>/environ, fall back to "latest CSV for this seed on this box".
+            if phase_from_env:
+                picked = (by_box_phase_seed.get((tag, phase_from_env, seed))
+                          or by_phase_seed.get((phase_from_env, seed)))
+                # Even if no CSV yet, we still want to surface the phase name.
+                if picked is None:
+                    p["phase"] = phase_from_env
+                    p["best_mppi"] = p["last_mppi"] = None
+                    p["best_step"] = p["last_step"] = None
+                    continue
+            if picked is None:
+                same_seed = [c for c in csv_index if c["seed"] == seed]
+                on_box = [c for c in same_seed if c["box"] == tag]
+                cand = on_box or same_seed
+                cand.sort(key=lambda r: r["mtime"], reverse=True)
+                picked = cand[0] if cand else None
+            if picked:
+                best, best_step, last, last_step = best_and_last(picked["path"])
+                p["phase"] = picked["phase"]
+                p["best_mppi"] = round(best, 1) if best >= 0 else None
+                p["best_step"] = best_step if best_step >= 0 else None
+                p["last_mppi"] = round(last, 1) if last >= 0 else None
+                p["last_step"] = last_step if last_step >= 0 else None
+            else:
+                p["phase"] = None
+                p["best_mppi"] = p["last_mppi"] = None
+                p["best_step"] = p["last_step"] = None
         boxes.append({"tag": tag, "label": label, "host": host, "port": port,
                       "gpu_idx": gpu_idx, **info})
-    return jsonify({"boxes": boxes, "ts": time.time()})
+    # active_keys = set of (phase, seed) tuples currently running anywhere
+    active = sorted({(p["phase"], p["seed"]) for b in boxes for p in b.get("procs", [])
+                    if p.get("phase") and p.get("seed")})
+    return jsonify({"boxes": boxes, "active": [{"phase": p, "seed": s} for p, s in active],
+                    "ts": time.time()})
 
 
 @app.route("/api/curves")
@@ -306,15 +469,55 @@ def api_curves():
 
 @app.route("/api/checkpoints")
 def api_checkpoints():
-    """List (phase, seed) tuples for which a best_mppi.pkl exists locally."""
+    """List (phase, seed) tuples for which a best_mppi.pkl exists locally,
+    annotated with best/last MPPI reward and sorted by best DESC."""
     out = []
+    # Build CSV index once, keyed by (phase, seed) → path
+    by_key = {}
+    for c in discover_csvs():
+        by_key[(c["phase"], c["seed"])] = c["path"]
+    seen: dict[tuple, dict] = {}  # (phase, seed) → checkpoint dict
+    videos_by_key = discover_existing_videos()
     for pkl in LOCAL_EXP.rglob("HopperHop_*/seed_*/checkpoints/best_mppi.pkl"):
         phase = pkl.parents[2].name.replace("HopperHop_", "")
         seed = pkl.parents[1].name.replace("seed_", "")
-        out.append({"phase": phase, "seed": seed,
-                    "ckpt": str(pkl), "mtime": pkl.stat().st_mtime,
-                    "size_mb": round(pkl.stat().st_size / 1e6, 1)})
-    out.sort(key=lambda r: (r["phase"], int(r["seed"]) if r["seed"].isdigit() else 99999))
+        key = (phase, seed)
+        try:
+            st = pkl.stat()
+        except OSError:
+            continue
+        prev = seen.get(key)
+        if prev is not None and prev["mtime"] >= st.st_mtime:
+            continue  # keep older one if it's somehow more recent
+        csv_path = by_key.get(key)
+        best, best_step, last, last_step = (-1, -1, -1, -1)
+        if csv_path:
+            best, best_step, last, last_step = best_and_last(csv_path)
+        # Pre-existing rendered videos (archive + new) for this checkpoint
+        archive_videos = videos_by_key.get(key, [])
+        job_videos = []
+        with JOBS_LOCK:
+            for jid, j in JOBS.items():
+                if (j.get("phase"), j.get("seed")) == key and j.get("video"):
+                    job_videos.append({
+                        "label": f"job-{jid}",
+                        "url": j["video"],
+                        "mtime": j.get("started_at", 0),
+                        "source": "dashboard",
+                    })
+        seen[key] = {
+            "phase": phase, "seed": seed,
+            "ckpt": str(pkl), "mtime": st.st_mtime,
+            "size_mb": round(st.st_size / 1e6, 1),
+            "best_mppi": round(best, 1) if best >= 0 else None,
+            "best_step": best_step if best_step >= 0 else None,
+            "last_mppi": round(last, 1) if last >= 0 else None,
+            "videos": archive_videos + job_videos,
+        }
+    out = list(seen.values())
+    # Sort: known reward DESC, then unknown by phase
+    out.sort(key=lambda r: (-(r["best_mppi"] if r["best_mppi"] is not None else -1.0),
+                            r["phase"]))
     return jsonify({"checkpoints": out})
 
 
@@ -332,6 +535,13 @@ def api_render():
     ckpt = find_best_ckpt(phase, str(seed))
     if not ckpt:
         return jsonify({"error": f"no best_mppi.pkl for {phase}/seed_{seed}"}), 404
+    # If a render for this (phase, seed) is already in flight, return its job_id
+    # rather than starting a duplicate.
+    with JOBS_LOCK:
+        for jid, j in JOBS.items():
+            if (j.get("phase") == phase and j.get("seed") == str(seed)
+                    and j.get("status") in ("queued", "running")):
+                return jsonify({"job_id": jid, "existing": True})
     job_id = uuid.uuid4().hex[:10]
     with JOBS_LOCK:
         JOBS[job_id] = {
@@ -362,6 +572,43 @@ def serve_video(fn):
     return send_from_directory(str(VIDEO_OUT), fn, conditional=True)
 
 
+@app.route("/exp_videos/<path:rel>")
+def serve_exp_video(rel):
+    # Restrict to mp4s under EXISTING_VIDEOS_ROOT only.
+    safe = (EXISTING_VIDEOS_ROOT / rel).resolve()
+    try:
+        safe.relative_to(EXISTING_VIDEOS_ROOT.resolve())
+    except ValueError:
+        abort(403)
+    if not safe.exists() or safe.suffix != ".mp4":
+        abort(404)
+    return send_from_directory(str(safe.parent), safe.name, conditional=True)
+
+
+@app.route("/api/jobs")
+def api_jobs():
+    """Active and recent (last hour) render jobs, so the UI can rehydrate after
+    a page refresh and surface any jobs another tab kicked off."""
+    cutoff = time.time() - 3600
+    with JOBS_LOCK:
+        items = []
+        for jid, j in JOBS.items():
+            if j.get("started_at", 0) < cutoff and j.get("status") in ("done", "failed"):
+                continue
+            items.append({
+                "job_id": jid,
+                "phase": j.get("phase"),
+                "seed": j.get("seed"),
+                "status": j.get("status"),
+                "progress": j.get("progress"),
+                "video": j.get("video"),
+                "started_at": j.get("started_at"),
+                "log_tail": j.get("log", [])[-3:],
+            })
+    items.sort(key=lambda r: -(r.get("started_at") or 0))
+    return jsonify({"jobs": items})
+
+
 # ─── HTML (Plotly via CDN; vanilla JS fetch) ─────────────────────────────
 
 INDEX_HTML = r"""<!DOCTYPE html>
@@ -376,7 +623,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
   header .meta{color:var(--muted);font-size:12px}
   .container{padding:14px 18px;max-width:1600px;margin:0 auto}
   section{background:var(--panel);border:1px solid var(--line);border-radius:6px;margin-bottom:14px;padding:12px 16px}
-  section h2{font-size:13px;font-weight:600;margin:0 0 10px 0;color:var(--accent);letter-spacing:.04em;text-transform:uppercase}
+  section h2{font-size:13px;font-weight:600;margin:0 0 10px 0;color:var(--accent);letter-spacing:.04em;text-transform:uppercase;display:flex;align-items:center;gap:10px}
+  .refresh-btn{font-size:11px;padding:2px 8px;letter-spacing:0;text-transform:none;font-weight:400;background:#2a3346;color:var(--fg);border:1px solid var(--line);border-radius:3px;cursor:pointer;margin-left:auto}
+  .refresh-btn:hover{background:#36405a}
+  select{background:#222a3b;color:var(--fg);border:1px solid var(--line);border-radius:3px;padding:2px 6px}
   table{width:100%;border-collapse:collapse;font-size:12px}
   th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
   th{color:var(--muted);font-weight:500}
@@ -408,16 +658,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
 <div class="container">
 
-  <section><h2>Box Fleet</h2>
+  <section><h2>Box Fleet <button class="refresh-btn" onclick="loadBoxes()">&#x21bb; refresh</button></h2>
     <table id="boxes"><thead>
-      <tr><th>Tag</th><th>Label</th><th>GPU</th><th>Mem</th><th>CPU</th><th>Running</th></tr>
+      <tr><th>Tag</th><th>Label</th><th>GPU</th><th>Mem</th><th>CPU</th><th>Running (phase · seed · best · last)</th></tr>
     </thead><tbody></tbody></table>
   </section>
 
-  <section><h2>Learning Curves <span class="small" id="curves-count"></span></h2>
+  <section><h2>Learning Curves <span class="small" id="curves-count"></span>
+    <button class="refresh-btn" onclick="loadCurves()">&#x21bb; refresh</button></h2>
     <div class="small" style="margin-bottom:8px">
       Filter:
       <label><input type="checkbox" id="only-mppi" checked> only MPPI evals</label>
+      &nbsp;&nbsp;
+      <label><input type="checkbox" id="only-running"> only currently-running seeds</label>
       &nbsp;&nbsp;
       <label>Phase contains: <input id="phase-filter" type="text" style="background:#222a3b;color:var(--fg);border:1px solid var(--line);border-radius:3px;padding:2px 6px;width:160px"></label>
       <button onclick="loadCurves()">apply</button>
@@ -425,7 +678,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <div id="curves"></div>
   </section>
 
-  <section><h2>Render Rollout <span class="small">pick a checkpoint → click render → MP4 plays inline</span></h2>
+  <section><h2>Render Rollout
+    <button class="refresh-btn" onclick="loadCheckpoints()">&#x21bb; refresh</button></h2>
+    <div class="small" style="margin-bottom:8px">
+      Length:
+      <select id="render-length">
+        <option value="2|200">short (2 × 200 steps)</option>
+        <option value="1|500">medium (1 × 500 steps)</option>
+        <option value="1|1000" selected>long (1 × 1000 steps)</option>
+        <option value="3|1000">extra long (3 × 1000 steps)</option>
+      </select>
+      <span class="small">camera: cam0 · 320×240</span>
+    </div>
     <div id="ckpts" class="video-row"></div>
     <div id="jobs" style="margin-top:14px"></div>
   </section>
@@ -435,10 +699,20 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 <script>
 const $ = sel => document.querySelector(sel);
+// Active (phase, seed) set, refreshed by loadBoxes(); consumed by loadCurves().
+let ACTIVE_KEYS = new Set();
+
+function fmtMppi(v){
+  if (v==null) return '<span class="small">—</span>';
+  const cls = v>=500 ? 'box-good' : (v>=300 ? 'box-warn' : '');
+  return `<span class="mono ${cls}">${v.toFixed ? v.toFixed(1) : v}</span>`;
+}
+function fmtStep(s){ if (s==null) return ''; return `<span class="small">@${(s/1e6).toFixed(2)}M</span>`; }
 
 function loadBoxes(){
   fetch('/api/boxes').then(r=>r.json()).then(j=>{
     $('#ts').textContent = new Date(j.ts*1000).toLocaleTimeString();
+    ACTIVE_KEYS = new Set((j.active||[]).map(a=>`${a.phase}|${a.seed}`));
     const tbody = $('#boxes tbody'); tbody.innerHTML = '';
     j.boxes.forEach(b=>{
       const tr = document.createElement('tr');
@@ -449,7 +723,12 @@ function loadBoxes(){
       const hotM = memPct!=null && memPct>=80;
       const procHTML = (b.procs||[]).map(p=>{
         const tag = (p.tag||'').split('+').filter(Boolean).map(t=>`<span class="chip ${t}">${t}</span>`).join('');
-        return `<div class="mono">PID ${p.pid} · ${p.etime} · ${p.algo} seed=${p.seed} NS=${p.ns} ${tag}</div>`;
+        const phaseStr = p.phase ? `<b>${p.phase}</b>` : '<span class="small">(no csv yet)</span>';
+        const dupChip = (p.dup_count && p.dup_count > 1) ? `<span class="chip" style="background:#54391c;color:#e0a44c" title="more than one process found for this seed+phase — likely zombie">${p.dup_count}× DUP</span>` : '';
+        return `<div class="mono" style="line-height:1.5">
+          ${phaseStr} · s${p.seed} · best ${fmtMppi(p.best_mppi)}${fmtStep(p.best_step)} · last ${fmtMppi(p.last_mppi)}${fmtStep(p.last_step)} ${dupChip}
+          <div class="small" style="opacity:.7">PID ${p.pid} · ${p.etime} · ${p.algo} NS=${p.ns} ${tag}</div>
+        </div>`;
       }).join('') || '<span class="small">(idle)</span>';
       tr.innerHTML = `
         <td class="mono ${ok?'':'box-bad'}">${b.tag}</td>
@@ -461,6 +740,8 @@ function loadBoxes(){
       `;
       tbody.appendChild(tr);
     });
+    // re-render curves if the running-only filter is active
+    if ($('#only-running') && $('#only-running').checked) loadCurves();
   });
 }
 
@@ -468,21 +749,27 @@ function loadCurves(){
   const phaseFilter = $('#phase-filter').value.trim();
   const url = '/api/curves' + (phaseFilter ? '?phase='+encodeURIComponent(phaseFilter) : '');
   fetch(url).then(r=>r.json()).then(j=>{
-    $('#curves-count').textContent = `(${j.curves.length} traces)`;
     const onlyMppi = $('#only-mppi').checked;
+    const onlyRunning = $('#only-running') && $('#only-running').checked;
+    const filtered = onlyRunning
+      ? j.curves.filter(c => ACTIVE_KEYS.has(`${c.phase}|${c.seed}`))
+      : j.curves;
+    $('#curves-count').textContent =
+      `(${filtered.length}/${j.curves.length} traces${onlyRunning ? ', running only' : ''})`;
     const traces = [];
-    j.curves.forEach(c=>{
+    filtered.forEach(c=>{
       let pts = c.points;
       if (onlyMppi) pts = pts.filter(p=>p.eval_type==='mppi');
       if (!pts.length) return;
       const best = Math.max(...pts.map(p=>p.reward));
+      const isRunning = ACTIVE_KEYS.has(`${c.phase}|${c.seed}`);
       const color = best>=500 ? '#7dd87b' : (best>=300 ? '#e0a44c' : '#7e8ba0');
       traces.push({
         x: pts.map(p=>p.step), y: pts.map(p=>p.reward),
         type:'scattergl', mode:'lines',
-        name: `${c.phase} s${c.seed} (${best.toFixed(0)})`,
-        line:{width:1.2, color},
-        hovertemplate: `${c.phase} s${c.seed}<br>step %{x:,d} → %{y:.1f}<extra></extra>`,
+        name: `${c.phase} s${c.seed} (${best.toFixed(0)})${isRunning ? ' ●' : ''}`,
+        line:{width: isRunning ? 2 : 1.2, color, dash: isRunning ? 'solid' : 'solid'},
+        hovertemplate: `${c.phase} s${c.seed}${isRunning?' (running)':''}<br>step %{x:,d} → %{y:.1f}<extra></extra>`,
       });
     });
     Plotly.react('curves', traces, {
@@ -500,17 +787,38 @@ function loadCurves(){
   });
 }
 
+// Track which (phase, seed) keys currently have an in-flight render job so we
+// don't reset their button to "Render rollout" on the next loadCheckpoints().
+const ACTIVE_RENDER_KEYS = new Set();
+function renderKey(phase, seed){ return `${phase}|${seed}`; }
+
 function loadCheckpoints(){
   fetch('/api/checkpoints').then(r=>r.json()).then(j=>{
     const root = $('#ckpts'); root.innerHTML = '';
     if (!j.checkpoints.length) { root.innerHTML = '<span class="small">no checkpoints found yet</span>'; return; }
+    j.checkpoints.sort((a,b)=> (b.best_mppi ?? -1) - (a.best_mppi ?? -1));
     j.checkpoints.forEach(c=>{
       const card = document.createElement('div');
       card.className = 'video-card';
+      const v = c.best_mppi;
+      const badgeCls = v==null ? 'gray' : (v>=500 ? 'green' : 'gray');
+      const badgeText = v==null ? '— MPPI' : `MPPI ${v.toFixed(1)}`;
+      const key = renderKey(c.phase, c.seed);
+      const busy = ACTIVE_RENDER_KEYS.has(key);
+      const btnLabel = busy ? 'rendering…' : (c.videos && c.videos.length ? 'Re-render' : 'Render rollout');
+      const videosHTML = (c.videos||[]).map(v => `
+        <div style="margin-top:6px">
+          <div class="small" style="opacity:.7">${v.source==='archive'?'archived':'rendered'} · ${v.label}</div>
+          <video src="${v.url}" controls preload="metadata" style="width:100%;border-radius:4px;background:#000"></video>
+        </div>
+      `).join('');
       card.innerHTML = `
-        <div><b>${c.phase}</b> · seed ${c.seed} <span class="small">(${c.size_mb} MB)</span></div>
-        <div class="small">${new Date(c.mtime*1000).toLocaleString()}</div>
-        <button data-phase="${c.phase}" data-seed="${c.seed}">Render rollout</button>
+        <div><b>${c.phase}</b> · seed ${c.seed}
+          <span class="pill ${badgeCls}">${badgeText}</span>
+        </div>
+        <div class="small">last ${c.last_mppi==null?'—':c.last_mppi.toFixed(1)} · ${c.size_mb} MB · ${new Date(c.mtime*1000).toLocaleString()}</div>
+        <button data-phase="${c.phase}" data-seed="${c.seed}" ${busy?'disabled':''}>${btnLabel}</button>
+        ${videosHTML}
       `;
       root.appendChild(card);
     });
@@ -520,13 +828,60 @@ function loadCheckpoints(){
   });
 }
 
+function loadJobs(){
+  fetch('/api/jobs').then(r=>r.json()).then(j=>{
+    ACTIVE_RENDER_KEYS.clear();
+    j.jobs.forEach(job=>{
+      if (job.status==='queued' || job.status==='running')
+        ACTIVE_RENDER_KEYS.add(renderKey(job.phase, job.seed));
+    });
+    const root = $('#jobs');
+    // Reuse any existing card; otherwise add a new one. Don't blow away the
+    // panel on each tick — that loses scroll position and rebuilds <video>s.
+    const have = new Set();
+    j.jobs.forEach(job=>{
+      have.add(job.job_id);
+      if (!document.getElementById('job-'+job.job_id)){
+        addJobCard(job.job_id, job.phase, job.seed);
+        // start polling for ongoing jobs we just discovered
+        if (job.status==='queued' || job.status==='running')
+          pollJob(job.job_id, null);
+      }
+      // For done/failed jobs we just discovered, populate once.
+      if (job.status==='done' || job.status==='failed'){
+        const stEl = document.getElementById('st-'+job.job_id);
+        const pgEl = document.getElementById('pg-'+job.job_id);
+        const vidEl = document.getElementById('vid-'+job.job_id);
+        if (stEl){ stEl.textContent = job.status;
+                   stEl.className = 'pill ' + (job.status==='done'?'green':'gray'); }
+        if (pgEl) pgEl.value = 100;
+        if (vidEl && job.video && !vidEl.innerHTML)
+          vidEl.innerHTML = `<video src="${job.video}" controls preload="metadata" style="width:100%;margin-top:6px;border-radius:4px"></video>`;
+      }
+    });
+    // Drop any orphan job cards whose jobs the server forgot.
+    document.querySelectorAll('#jobs .video-card').forEach(card=>{
+      const id = card.id.replace(/^job-/,'');
+      if (!have.has(id)) card.remove();
+    });
+  });
+}
+
 function startRender(phase, seed, btn){
   btn.disabled = true; btn.textContent = 'queued…';
+  ACTIVE_RENDER_KEYS.add(renderKey(phase, seed));
+  const lenSel = document.getElementById('render-length');
+  const [nEps, epLen] = (lenSel ? lenSel.value : '1|1000').split('|').map(Number);
   fetch('/api/render', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({phase, seed, env_id:'HopperHop', camera:'cam0', n_episodes:2, episode_length:200})
+    body: JSON.stringify({phase, seed, env_id:'HopperHop', camera:'cam0',
+                          n_episodes:nEps, episode_length:epLen})
   }).then(r=>r.json()).then(j=>{
-    if (j.error) { btn.textContent='Render rollout'; btn.disabled=false; alert(j.error); return; }
-    addJobCard(j.job_id, phase, seed);
+    if (j.error) {
+      ACTIVE_RENDER_KEYS.delete(renderKey(phase, seed));
+      btn.textContent='Render rollout'; btn.disabled=false;
+      alert(j.error); return;
+    }
+    if (!document.getElementById('job-'+j.job_id)) addJobCard(j.job_id, phase, seed);
     pollJob(j.job_id, btn);
   });
 }
@@ -546,21 +901,28 @@ function addJobCard(jobId, phase, seed){
 
 function pollJob(jobId, btn){
   fetch('/api/render/'+jobId).then(r=>r.json()).then(j=>{
-    const stEl = $('#st-'+jobId);
-    const pgEl = $('#pg-'+jobId);
-    const logEl = $('#log-'+jobId);
-    const vidEl = $('#vid-'+jobId);
+    const stEl = document.getElementById('st-'+jobId);
+    const pgEl = document.getElementById('pg-'+jobId);
+    const logEl = document.getElementById('log-'+jobId);
+    const vidEl = document.getElementById('vid-'+jobId);
+    if (!stEl) return;  // card was removed
     pgEl.value = (j.progress||0)*100;
     stEl.textContent = j.status;
     stEl.className = 'pill ' + (j.status==='done' ? 'green' : 'gray');
     logEl.textContent = (j.log||[]).slice(-3).join('\n');
+    const key = renderKey(j.phase, j.seed);
     if (j.status==='done' && j.video){
-      vidEl.innerHTML = `<video src="${j.video}" controls style="width:100%;margin-top:6px;border-radius:4px"></video>`;
-      if (btn) { btn.disabled=false; btn.textContent='Render rollout'; }
+      if (!vidEl.innerHTML)
+        vidEl.innerHTML = `<video src="${j.video}" controls preload="metadata" style="width:100%;margin-top:6px;border-radius:4px"></video>`;
+      ACTIVE_RENDER_KEYS.delete(key);
+      if (btn) { btn.disabled=false; btn.textContent='Re-render'; }
+      // refresh checkpoint cards so the new video shows there too
+      loadCheckpoints();
       return;
     }
     if (j.status==='failed'){
       vidEl.innerHTML = `<span class="box-bad small">render failed — see log</span>`;
+      ACTIVE_RENDER_KEYS.delete(key);
       if (btn) { btn.disabled=false; btn.textContent='Render rollout'; }
       return;
     }
@@ -569,9 +931,20 @@ function pollJob(jobId, btn){
 }
 
 // initial + periodic refresh
-loadBoxes(); loadCurves(); loadCheckpoints();
+loadBoxes(); loadCurves(); loadJobs(); loadCheckpoints();
 setInterval(loadBoxes, 30000);
 setInterval(loadCurves, 60000);
+setInterval(loadJobs, 4000);          // job state — fast enough that the active set
+                                       // stays accurate during a 30-90 s render
+setInterval(loadCheckpoints, 90000);
+
+// Wire up checkbox/text filter inputs so they re-render immediately.
+['only-mppi','only-running'].forEach(id=>{
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', loadCurves);
+});
+const pf = document.getElementById('phase-filter');
+if (pf) pf.addEventListener('keydown', e=>{ if (e.key==='Enter') loadCurves(); });
 </script>
 </body></html>
 """

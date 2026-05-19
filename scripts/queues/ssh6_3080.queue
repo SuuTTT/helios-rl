@@ -2,3 +2,5 @@
 # NOTE: separate physical box from ssh6:11115 (4060). Different vast.ai instance.
 # DONE 17:09:17Z 16779|ssh6.vast.ai|scripts/run_phaseq_knee_5seed.sh|SEEDS=8 XLA_PYTHON_CLIENT_MEM_FRACTION=0.65 (launch killed by SSH cleanup, requeued)
 # DONE 17:10:48Z 16779|ssh6.vast.ai|scripts/run_phaseq_knee_5seed.sh|SEEDS=8 XLA_PYTHON_CLIENT_MEM_FRACTION=0.65
+# Phase-q s8 finished clean 2026-05-19T00:06:03 (status=0, best MPPI 529, G1 winner)
+# DONE 00:15:12Z 16779|ssh6.vast.ai|scripts/run_phaseq_knee_5seed.sh|SEEDS=11 XLA_PYTHON_CLIENT_MEM_FRACTION=0.65

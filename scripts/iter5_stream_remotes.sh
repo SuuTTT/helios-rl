@@ -8,11 +8,14 @@ LOCAL=/root/helios-rl/exp/tdmpc_glass
 MIRROR=$LOCAL/remote_mirror
 LOGS=$LOCAL/logs_mirror
 
-# Per-box rsync helper: mirrors ALL HopperHop_* dirs (no per-phase include list).
+# Per-box rsync helper. Hard 60s timeout + SSH keepalives so a single dead box
+# can't stall the whole stream loop (we hit that bug once already).
 sync_box() {
   local port=$1 host=$2 dest=$3
   mkdir -p "$dest"
-  rsync -a -e "ssh -p $port -o StrictHostKeyChecking=no -o ConnectTimeout=10" \
+  timeout 60 rsync -a -e "ssh -p $port -o StrictHostKeyChecking=no \
+        -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+        -o BatchMode=yes" \
         --include='HopperHop_*/' --include='HopperHop_*/**' \
         --exclude='**/checkpoints/**' --exclude='**/checkpoints' \
         --exclude='**/*.pkl' \
@@ -30,7 +33,7 @@ summarize_box() {
   # 1. CSV mtime newer than the last fully-completed phase (older than 7 days = "old archived")
   # 2. CSV has at least one eval row (size > 100 bytes; bare header is ~27)
   # 3. Phase prefix is in "active" allowlist (current iter 5-6 phases)
-  for csv in $(find "$dest" -path "*/HopperHop_*/seed_*.csv" -mtime -2 -size +100c 2>/dev/null | sort); do
+  for csv in $(find "$dest" -path "*/HopperHop_*/seed_*.csv" -mtime -2 -size +30c 2>/dev/null | sort); do
     [[ -f $csv ]] || continue
     local fname=$(basename "$csv" .csv)
     # Skip backup snapshots and diagnostic sidecars
@@ -69,5 +72,5 @@ while true; do
   summarize_box "ssh3_3070   " $MIRROR/ssh3_3070
   summarize_box "ssh6_3080   " $MIRROR/ssh6_3080
 
-  sleep 600
+  sleep 300
 done

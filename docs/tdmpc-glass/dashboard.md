@@ -6,6 +6,8 @@
 
 Phase-1b baseline finals reference: `[526, 526, 294, 227, 562]`, mean 427, 2/5 > 500.
 
+**For resuming after a session restart, see [dashboard_resume.md](dashboard_resume.md).**
+
 Refresh with: `bash scripts/iter5_dashboard.sh` (terminal, all 6 boxes auto-detected)
 
 Or web dashboard (live boxes + Plotly curves + click-to-render rollouts):

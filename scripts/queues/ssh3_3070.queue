@@ -1,3 +1,5 @@
 # ssh3 RTX 3070 8GB queue — Phase-q knee penalty extra seeds (G2 ceiling sweep)
 # 445 sps confirmed 2026-05-18, Python 3.12 fresh venv
 # DONE 17:08:53Z 15229|ssh3.vast.ai|scripts/run_phaseq_knee_5seed.sh|SEEDS=7 XLA_PYTHON_CLIENT_MEM_FRACTION=0.55
+# Phase-q s7 finished 00:25 (best MPPI 510, G1 winner)
+# DONE 00:30:59Z 15229|ssh3.vast.ai|scripts/run_phaseq_knee_5seed.sh|SEEDS=12 XLA_PYTHON_CLIENT_MEM_FRACTION=0.55
