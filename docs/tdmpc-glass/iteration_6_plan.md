@@ -158,34 +158,67 @@ priority.
 
 ## §3. Iteration 6 plan — what's running and what's next
 
-### §3.1 Currently running (let finish, don't touch)
+### §3.1 Phase-q sweep — DONE (12 seeds), G2 ceiling test
 
-| Box | Phase | What it answers |
+Knee penalty alone, vanilla TD-MPC2 (no Glass), NS=2048, EXPL_UNTIL=500k, smoothing curriculum.
+
+| Seed | Best MPPI | Notes |
 |---|---|---|
-| Local | **Phase-z** (vanilla TD-MPC2, 5 seeds sequential) | Q1 — is Glass helping at all? |
-| ssh6 4060 | Phase-q s5 (knee penalty, no Glass) | Q2 ceiling sweep |
-| ssh1 2080Ti | Phase-q s6 | Q2 ceiling sweep |
-| ssh3 3070 | Phase-q s12 | Q2 ceiling sweep |
-| ssh6 3080 | Phase-q s11 | Q2 ceiling sweep |
-| 2x3060 GPU0 | Phase-q s10 | Q2 ceiling sweep |
-| 2x3060 GPU1 | Phase-q s9 | Q2 ceiling sweep |
+| s1 | 269 | stuck-ish |
+| s2 | 303 | stuck-ish |
+| **s3** | **557** ✓ | G1 |
+| s5 | 343 | mid (slow box, ended 10M) |
+| s6 | 328 | mid |
+| **s7** | **510** ✓ | G1 |
+| **s8** | **529** ✓ | G1 |
+| s9 | 286 | still 7.75M, slow |
+| s10 | 242 | mid |
+| s11 | 347 | mid |
+| **s12** | **553** ✓ | G1 |
 
-**Phase-q sweep tally (11 seeds run, 2/11 G1 winners as of 2026-05-19 01:00Z)**:
-s1=269, s2=303, s5=343, s6=270, s7=**510** ✓, s8=**529** ✓, s9=263 (still climbing), s10=242, s11=187, s12≈1 (early).
-No seed broke 600 → knee penalty alone doesn't replicate Phase-t s2's 612 — Glass+knee was the surge combination, not knee alone. Sweep was over-allocated (target was 5 seeds; doubled to 11). No further phaseq seeds will be queued — boxes flip to r1/r2 on idle.
+**Result: 4/12 G1 winners (33%), 0/12 G2 (max 557). Knee penalty alone caps near 560 — does not replicate Phase-t s2=612 (which had Glass+knee).** Sweep over-allocated (planned 5, ran 12); marginal value of seeds 6-12 was 2 extra G1 winners but no G2 break. No more phaseq seeds will be queued.
 
-### §3.1b Queued next (r1 / r2, will auto-launch when their box frees up)
+### §3.1b Phase-r1 (soft-reward bundle v1) — running, 5 seeds
 
-| Box | Next | What it answers |
-|---|---|---|
-| ssh6 4060 | **Phase-r2 s1** (gait penalty: fall + action-smooth) | §7.C |
-| ssh1 2080Ti | Phase-r2 s2 | §7.C |
-| ssh6 3080 | Phase-r2 s3 | §7.C |
-| ssh3 3070 | **Phase-r1 s1** (soft-reward: stand_bonus + anneal) | §7.B v1 |
-| 2x3060 GPU0 | Phase-r1 s2 | §7.B v1 |
-| 2x3060 GPU1 | Phase-r1 s3 | §7.B v1 |
+v1 = stand_bonus 0.1 (clip((h - 0.4)/0.2, 0, 1)) + linear weight anneal 1.0 → 0.0 over [0, 3M] env steps. Skipped from v2-spec: speed_curriculum, last-200-step early bonus.
 
-r1/r2 implementations landed 2026-05-19 in `run_benchmark.py`. Phase-r1 v1 is the cheap two of §7.B (stand_bonus + linear-anneal); speed_curriculum and last-200-step early bonus deferred to v2. Phase-r2 is the full §7.C (fall_penalty + action_smooth).
+| Seed | Best | Last | Step | Notes |
+|---|---|---|---|---|
+| s1 | 276 | 276 | 4.75M | climbing |
+| **s2** | **553** ✓ | 548 | 5.5M | G1 winner, killed @ 5.5M (SIGKILL/OOM) |
+| s3 | 398 | 398 | 7.75M | climbing, near G1 |
+| s4 | 200 | 90 | 5.25M | dropped, may recover |
+| s5 | 157 | 0 | 3.0M | early |
+
+**Preliminary: 1/5 G1 hits, s3 close, others still climbing. Soft-reward bundle is promising but no G2 (max 553).**
+
+### §3.1c Phase-r2 (gait penalty bundle) — running, 4 seeds
+
+Full §7.C: fall_penalty -0.1 when height < 0.45 m + action_smooth -0.005·mean((Δa)²).
+
+| Seed | Best | Last | Step | Notes |
+|---|---|---|---|---|
+| s1 | 7 | 7 | 1.5M | stuck-seed pattern (action_smooth too aggressive?) |
+| s2 | 464 | 402 | 10M | close to G1, DONE |
+| s3 | 390 | 314 | 6.5M | climbing |
+| s4 | 279 | 259 | 10M | mid, DONE |
+
+**Preliminary: 0/4 G1 hits, max 464. Gait penalty looks slightly worse than knee/soft so far — action_smooth may be too restrictive. Worth letting in-flight finish before concluding.**
+
+### §3.1d Cross-bundle G1 hit-rate summary
+
+| Bundle | G1 hits / total | Max MPPI | Notes |
+|---|---|---|---|
+| **Phase-q knee** | **4 / 12 = 33 %** | 557 | most data |
+| **Phase-r1 soft** | 1 / 5 = 20 % (partial) | 553 | 3 still climbing |
+| **Phase-r2 gait** | 0 / 4 = 0 % (partial) | 464 | 2 still climbing |
+| (reference) Phase-x NS=2048 | 2 / 5 = 40 % | 525 | iter 5 baseline |
+
+**G2 broke**: 0 seeds across all bundles (only Phase-t s2=612 in iter 5 with Glass+knee combined hit it). The single-knob recipes don't reach Phase-t's surge.
+
+### §3.1e Next decision: Phase-r-stack (§7.E)
+
+Iter 6 plan §7.F says: after r1+r2 land, run **Phase-r-stack** = Glass + NS=2048 + EXPL_UNTIL=500k + curriculum smoothing + soft-reward bundle + gait penalty, 5 seeds. We have enough preliminary signal now (1+0 partial G1 hits but trajectories suggest each bundle has *some* signal), and the headline question is whether stacking pushes through G2 = break-600. Starting r-stack on the 3 idle fast boxes today (local 4070 Ti, ssh1 2080 Ti, ssh17637 gpu1).
 
 ### §3.2 Stop / drop
 

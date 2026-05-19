@@ -4,4 +4,4 @@
 # Phase-q s7 finished 00:25 (best MPPI 510, G1 winner)
 # DONE 00:30:59Z 15229|ssh3.vast.ai|scripts/run_phaseq_knee_5seed.sh|SEEDS=12 XLA_PYTHON_CLIENT_MEM_FRACTION=0.55
 # 2026-05-19: s12 still running; queue r1 s1 for after
-15229|ssh3.vast.ai|scripts/run_phaser1_soft.sh|SEEDS=1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.55
+# DONE 07:46:54Z 15229|ssh3.vast.ai|scripts/run_phaser1_soft.sh|SEEDS=1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.55
