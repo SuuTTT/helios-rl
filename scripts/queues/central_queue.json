@@ -5,11 +5,11 @@
     "launcher": "scripts/run_phase1b_10m.sh",
     "env": "SEEDS=1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75",
     "priority": 10,
-    "status": "running",
+    "status": "done",
     "box": "local",
     "created_at": "2026-05-20T08:35:00Z",
     "started_at": "2026-05-20T13:43:43Z",
-    "ended_at": null
+    "ended_at": "2026-05-20T18:29:21Z"
   },
   {
     "id": "t0000004",
@@ -17,10 +17,10 @@
     "launcher": "scripts/run_phase1b_10m.sh",
     "env": "SEEDS=2 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75",
     "priority": 10,
-    "status": "pending",
-    "box": null,
+    "status": "running",
+    "box": "ssh6_4060",
     "created_at": "2026-05-20T08:35:00Z",
-    "started_at": null,
+    "started_at": "2026-05-20T18:22:35Z",
     "ended_at": null
   },
   {
@@ -29,10 +29,10 @@
     "launcher": "scripts/run_phase1b_10m.sh",
     "env": "SEEDS=3 XLA_PYTHON_CLIENT_MEM_FRACTION=0.65",
     "priority": 10,
-    "status": "pending",
-    "box": null,
+    "status": "running",
+    "box": "ssh3_3070",
     "created_at": "2026-05-20T08:35:00Z",
-    "started_at": null,
+    "started_at": "2026-05-20T18:27:55Z",
     "ended_at": null
   },
   {
@@ -41,11 +41,11 @@
     "launcher": "scripts/run_phase1b_10m.sh",
     "env": "SEEDS=4 XLA_PYTHON_CLIENT_MEM_FRACTION=0.55",
     "priority": 10,
-    "status": "running",
+    "status": "done",
     "box": "ssh6_4060",
     "created_at": "2026-05-20T08:35:00Z",
     "started_at": "2026-05-20T13:28:31Z",
-    "ended_at": null
+    "ended_at": "2026-05-20T18:22:35Z"
   },
   {
     "id": "t0000007",
@@ -53,10 +53,10 @@
     "launcher": "scripts/run_phaseab_codex_tdmpc2_5seed.sh",
     "env": "SEEDS=1 K_UPDATE=128 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75",
     "priority": 12,
-    "status": "pending",
-    "box": null,
+    "status": "running",
+    "box": "local",
     "created_at": "2026-05-20T14:00:00Z",
-    "started_at": null,
+    "started_at": "2026-05-20T18:29:21Z",
     "ended_at": null
   },
   {
@@ -65,10 +65,10 @@
     "launcher": "scripts/run_phaseab_codex_tdmpc2_5seed.sh",
     "env": "SEEDS=2 K_UPDATE=128 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75",
     "priority": 12,
-    "status": "pending",
-    "box": null,
+    "status": "running",
+    "box": "ssh17637_gpu0",
     "created_at": "2026-05-20T14:00:00Z",
-    "started_at": null,
+    "started_at": "2026-05-20T19:55:47Z",
     "ended_at": null
   },
   {
@@ -117,6 +117,28 @@
     "box": null,
     "created_at": "2026-05-20T14:00:00Z",
     "started_at": null,
+    "ended_at": null
+  },
+  {
+    "id": "t4839e3a",
+    "label": "render phaseaa_codex_tdmpc2_k128 s1 (1\u00d7250steps)",
+    "launcher": "render_glass_rollout.py",
+    "env": "",
+    "type": "render",
+    "render_params": {
+      "ckpt": "/root/helios-rl/exp/tdmpc_glass/remote_mirror/ssh17637_2x3060/HopperHop_phaseaa_codex_tdmpc2_k128/seed_1/checkpoints/best_mppi.pkl",
+      "env_id": "HopperHop",
+      "camera": "cam0",
+      "n_episodes": 1,
+      "episode_length": 250,
+      "phase": "phaseaa_codex_tdmpc2_k128",
+      "seed": "1"
+    },
+    "priority": 1,
+    "status": "running",
+    "box": "local_render",
+    "created_at": "2026-05-20T22:56:27Z",
+    "started_at": "2026-05-20T22:56:28Z",
     "ended_at": null
   }
 ]
