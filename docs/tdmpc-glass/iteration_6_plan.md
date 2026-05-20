@@ -216,9 +216,20 @@ Full §7.C: fall_penalty -0.1 when height < 0.45 m + action_smooth -0.005·mean(
 
 **G2 broke**: 0 seeds across all bundles (only Phase-t s2=612 in iter 5 with Glass+knee combined hit it). The single-knob recipes don't reach Phase-t's surge.
 
-### §3.1e Next decision: Phase-r-stack (§7.E)
+### §3.1e Phase-r-stack — COLLAPSED, ABLATIONS RUNNING
 
-Iter 6 plan §7.F says: after r1+r2 land, run **Phase-r-stack** = Glass + NS=2048 + EXPL_UNTIL=500k + curriculum smoothing + soft-reward bundle + gait penalty, 5 seeds. We have enough preliminary signal now (1+0 partial G1 hits but trajectories suggest each bundle has *some* signal), and the headline question is whether stacking pushes through G2 = break-600. Starting r-stack on the 3 idle fast boxes today (local 4070 Ti, ssh1 2080 Ti, ssh17637 gpu1).
+Launched 5 seeds (s1 local, s2 ssh1, s3+s4 ssh17637, s5 ssh6_3080) with Glass + NS=2048 + EXPL_UNTIL=500k + smoothing curriculum + soft_stand_bonus + gait_fall_penalty + gait_action_smooth. **All 5 collapsed to best MPPI 5–16** (vs single-bundle bests 510–557). s1 hit early-stop at 6.5M with best=5.7.
+
+Stacking is destructively combining — the three shaping components together break learning where each alone was OK or even winning. Killed remaining 4 in-flight runs at 15:15Z.
+
+Two ablations launched 15:16Z to identify the killer:
+
+| Variant | Drops | Seeds | Hypothesis |
+|---|---|---|---|
+| **nosmooth** | `gait_action_smooth` | local s1, ssh6_3080 s2 | action_smooth penalising the bursty hopping actions is the killer |
+| **nosoft** | `soft_stand_bonus` | ssh1 s1, ssh3_3070 s2 | soft+gait both pulling on height (one rewards, one penalises) creates a double-bind |
+
+First eval expected ~15 min; clear recovery (>100 by 1.5M) vs continued flatline by 3M will indicate which knob to drop. If both flatline, Glass+shaping interaction itself is broken (Phase-v style) and r-stack with current Glass needs a different recipe.
 
 ### §3.2 Stop / drop
 

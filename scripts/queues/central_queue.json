@@ -1,0 +1,122 @@
+[
+  {
+    "id": "t0000003",
+    "label": "phase1b_10m seed 1 (Glass baseline rerun)",
+    "launcher": "scripts/run_phase1b_10m.sh",
+    "env": "SEEDS=1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75",
+    "priority": 10,
+    "status": "running",
+    "box": "local",
+    "created_at": "2026-05-20T08:35:00Z",
+    "started_at": "2026-05-20T13:43:43Z",
+    "ended_at": null
+  },
+  {
+    "id": "t0000004",
+    "label": "phase1b_10m seed 2 (Glass baseline rerun)",
+    "launcher": "scripts/run_phase1b_10m.sh",
+    "env": "SEEDS=2 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75",
+    "priority": 10,
+    "status": "pending",
+    "box": null,
+    "created_at": "2026-05-20T08:35:00Z",
+    "started_at": null,
+    "ended_at": null
+  },
+  {
+    "id": "t0000005",
+    "label": "phase1b_10m seed 3 (Glass baseline rerun)",
+    "launcher": "scripts/run_phase1b_10m.sh",
+    "env": "SEEDS=3 XLA_PYTHON_CLIENT_MEM_FRACTION=0.65",
+    "priority": 10,
+    "status": "pending",
+    "box": null,
+    "created_at": "2026-05-20T08:35:00Z",
+    "started_at": null,
+    "ended_at": null
+  },
+  {
+    "id": "t0000006",
+    "label": "phase1b_10m seed 4 (Glass baseline rerun)",
+    "launcher": "scripts/run_phase1b_10m.sh",
+    "env": "SEEDS=4 XLA_PYTHON_CLIENT_MEM_FRACTION=0.55",
+    "priority": 10,
+    "status": "running",
+    "box": "ssh6_4060",
+    "created_at": "2026-05-20T08:35:00Z",
+    "started_at": "2026-05-20T13:28:31Z",
+    "ended_at": null
+  },
+  {
+    "id": "t0000007",
+    "label": "phaseab tdmpc2 K128 seed 1",
+    "launcher": "scripts/run_phaseab_codex_tdmpc2_5seed.sh",
+    "env": "SEEDS=1 K_UPDATE=128 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75",
+    "priority": 12,
+    "status": "pending",
+    "box": null,
+    "created_at": "2026-05-20T14:00:00Z",
+    "started_at": null,
+    "ended_at": null
+  },
+  {
+    "id": "t0000008",
+    "label": "phaseab tdmpc2 K128 seed 2",
+    "launcher": "scripts/run_phaseab_codex_tdmpc2_5seed.sh",
+    "env": "SEEDS=2 K_UPDATE=128 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75",
+    "priority": 12,
+    "status": "pending",
+    "box": null,
+    "created_at": "2026-05-20T14:00:00Z",
+    "started_at": null,
+    "ended_at": null
+  },
+  {
+    "id": "t0000009",
+    "label": "phaseab tdmpc2 K128 seed 3",
+    "launcher": "scripts/run_phaseab_codex_tdmpc2_5seed.sh",
+    "env": "SEEDS=3 K_UPDATE=128 XLA_PYTHON_CLIENT_MEM_FRACTION=0.65",
+    "priority": 12,
+    "status": "pending",
+    "box": null,
+    "created_at": "2026-05-20T14:00:00Z",
+    "started_at": null,
+    "ended_at": null
+  },
+  {
+    "id": "t0000010",
+    "label": "phaseac Glass K128 seed 1",
+    "launcher": "scripts/run_phaseac_codex_glass_5seed.sh",
+    "env": "SEEDS=1 K_UPDATE=128 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75",
+    "priority": 14,
+    "status": "pending",
+    "box": null,
+    "created_at": "2026-05-20T14:00:00Z",
+    "started_at": null,
+    "ended_at": null
+  },
+  {
+    "id": "t0000011",
+    "label": "phaseac Glass K128 seed 2",
+    "launcher": "scripts/run_phaseac_codex_glass_5seed.sh",
+    "env": "SEEDS=2 K_UPDATE=128 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75",
+    "priority": 14,
+    "status": "pending",
+    "box": null,
+    "created_at": "2026-05-20T14:00:00Z",
+    "started_at": null,
+    "ended_at": null
+  },
+  {
+    "id": "t0000012",
+    "label": "phaseac Glass K128 seed 3",
+    "launcher": "scripts/run_phaseac_codex_glass_5seed.sh",
+    "env": "SEEDS=3 K_UPDATE=128 XLA_PYTHON_CLIENT_MEM_FRACTION=0.65",
+    "priority": 14,
+    "status": "pending",
+    "box": null,
+    "created_at": "2026-05-20T14:00:00Z",
+    "started_at": null,
+    "ended_at": null
+  }
+]

@@ -482,6 +482,7 @@ def train_tdmpc2(
     act_noise_anneal_steps: int = 1_000_000,
     mppi_horizon: int | None = None,
     mppi_n_samples: int | None = None,
+    k_update: int | None = None,
     q_reset_steps: list[int] | None = None,
     latent_action_smooth_coef: float = 0.0,
     consistency_coef: float | None = None,
@@ -489,6 +490,7 @@ def train_tdmpc2(
     latent_smooth_warmup_env_steps: int = 0,
     glass_decay_steps: int = 0,
     expl_until: int | None = None,
+    expl_mix_decay_steps: int = 0,
     knee_penalty_coef: float = 0.0,
     knee_penalty_threshold: float = 0.15,
     cluster_intrinsic_coef: float = 0.0,
@@ -532,7 +534,9 @@ def train_tdmpc2(
     tau        = d["tau"]          # 0.01
     rho        = d["rho"]          # 0.5
     rew_scale  = d["rew_scale"]    # 10.0
-    K_UPDATE   = d["K_UPDATE"]     # 64
+    K_UPDATE   = int(k_update) if k_update is not None else d["K_UPDATE"]     # 64
+    if k_update is not None and K_UPDATE != d["K_UPDATE"]:
+        print(f"  K_UPDATE override: {K_UPDATE} gradient updates per batch (default {d['K_UPDATE']})", flush=True)
     BS         = d["BS"]           # 256
     N_ENVS     = d["N_ENVS"]       # 256
     WARMUP     = d["WARMUP_ENV"]   # 25_000
@@ -540,6 +544,13 @@ def train_tdmpc2(
     EXPL_UNTIL = int(expl_until) if expl_until is not None else d["EXPL_UNTIL"]   # 25_000 default
     if expl_until is not None and EXPL_UNTIL != d["EXPL_UNTIL"]:
         print(f"  EXPL_UNTIL override: random actions for first {EXPL_UNTIL:,} env-steps (default {d['EXPL_UNTIL']:,})", flush=True)
+    EXPL_MIX_DECAY_STEPS = max(int(expl_mix_decay_steps), 0)
+    if EXPL_MIX_DECAY_STEPS > 0:
+        print(
+            f"  EXPL_MIX override: random-policy action mixture decays random prob 1.0 -> 0.0 "
+            f"over {EXPL_MIX_DECAY_STEPS:,} env-steps",
+            flush=True,
+        )
     # Optional act-noise anneal: linearly decay from start -> end over
     # `act_noise_anneal_steps` env steps. Defaults reproduce baseline behaviour
     # (constant EXPL_NOISE).
@@ -630,6 +641,7 @@ def train_tdmpc2(
     opt = tx.init(params)
     resume_env_steps = 0
     resume_best_mppi = -float("inf")
+    resume_best_mppi_step = 0
     resume_payload = None
     if resume_checkpoint:
         with open(resume_checkpoint, "rb") as rf:
@@ -640,7 +652,10 @@ def train_tdmpc2(
         scale = jnp.asarray(resume_payload.get("scale", scale))
         glass_step = jnp.asarray(resume_payload.get("glass_step", glass_step))
         resume_env_steps = int(resume_payload.get("env_steps", 0))
-        resume_best_mppi = float(resume_payload.get("mppi_reward", -float("inf")))
+        resume_best_mppi = float(
+            resume_payload.get("best_mppi", resume_payload.get("mppi_reward", -float("inf")))
+        )
+        resume_best_mppi_step = int(resume_payload.get("best_mppi_step", resume_env_steps))
         print(
             f"  Resumed model checkpoint {resume_checkpoint} "
             f"at env_steps={resume_env_steps:,}",
@@ -951,7 +966,7 @@ def train_tdmpc2(
     eval_type_csv = None
     ckpt_dir = None
     best_mppi = resume_best_mppi
-    best_mppi_step = 0
+    best_mppi_step = resume_best_mppi_step
     early_stop_triggered = False
     _patience = max(int(early_stop_patience), 0)
     if _patience > 0:
@@ -968,7 +983,7 @@ def train_tdmpc2(
             / f"seed_{seed}.csv"
         )
         eval_type_csv.parent.mkdir(parents=True, exist_ok=True)
-        if not (resume_checkpoint and eval_type_csv.exists()):
+        if not eval_type_csv.exists():
             with open(eval_type_csv, "w") as cf:
                 cf.write("step,reward,eval_type,seed\n")
     elif env_id == "HopperHop":
@@ -986,14 +1001,8 @@ def train_tdmpc2(
             with open(eval_type_csv, "w") as cf:
                 cf.write("step,reward,eval_type,seed\n")
 
-    if use_glass:
-        ckpt_dir = (
-            EXP_DIR.parent
-            / "tdmpc_glass"
-            / _env_dir
-            / f"seed_{seed}"
-            / "checkpoints"
-        )
+    if eval_type_csv is not None:
+        ckpt_dir = eval_type_csv.parent / f"seed_{seed}" / "checkpoints"
 
     # ── Warmup JIT — compile multi_step with dummy data
     print("  Warming up JIT (may take 30-90s)...", flush=True)
@@ -1049,7 +1058,16 @@ def train_tdmpc2(
     with open_csv(csv_path, env_id, seed) as fh:
         while env_steps < total_steps:
             # Collect N_ENVS steps
-            if env_steps < EXPL_UNTIL:
+            if EXPL_MIX_DECAY_STEPS > 0:
+                rand_prob = max(0.0, 1.0 - env_steps / EXPL_MIX_DECAY_STEPS)
+                rand_acts = rng_np.uniform(al, ah, (N_ENVS, act_dim)).astype(np.float32)
+                acts_jax = act_fn_batch(params, jnp.asarray(obs_np))
+                _sigma = _current_noise(env_steps)
+                noise = rng_np.normal(0, _sigma, (N_ENVS, act_dim))
+                policy_acts = np.clip(np.array(acts_jax) + noise, al, ah).astype(np.float32)
+                rand_mask = rng_np.random((N_ENVS, 1)) < rand_prob
+                acts_np = np.where(rand_mask, rand_acts, policy_acts).astype(np.float32)
+            elif env_steps < EXPL_UNTIL:
                 acts_np = rng_np.uniform(al, ah, (N_ENVS, act_dim)).astype(np.float32)
             else:
                 acts_jax = act_fn_batch(params, jnp.asarray(obs_np))
@@ -1218,7 +1236,7 @@ def train_tdmpc2(
                         df.write(f"{env_steps},mppi,{seed},{mppi_diag['full']:.4f},{mppi_diag['stand']:.4f},{mppi_diag['falls']},{mppi_diag['ttf']}\n")
                 if ckpt_dir is not None:
                     ckpt_payload = {
-                        "algo": "tdmpc-glass",
+                        "algo": "tdmpc-glass" if use_glass else "tdmpc2",
                         "env_id": env_id,
                         "seed": seed,
                         "env_steps": env_steps,
@@ -1230,13 +1248,17 @@ def train_tdmpc2(
                         "scale": jax.device_get(scale),
                         "glass_step": jax.device_get(glass_step),
                         "key": jax.device_get(key),
-                        "glass_config": dict(glass_cfg),
+                        "glass_config": dict(glass_cfg) if use_glass else {},
+                        "best_mppi": best_mppi,
+                        "best_mppi_step": best_mppi_step,
                     }
-                    save_pickle_atomic(ckpt_dir / "latest_eval.pkl", ckpt_payload)
                     if mppi_ret > best_mppi:
                         best_mppi = mppi_ret
                         best_mppi_step = env_steps
+                        ckpt_payload["best_mppi"] = best_mppi
+                        ckpt_payload["best_mppi_step"] = best_mppi_step
                         save_pickle_atomic(ckpt_dir / "best_mppi.pkl", ckpt_payload)
+                    save_pickle_atomic(ckpt_dir / "latest_eval.pkl", ckpt_payload)
                     if save_full_state:
                         full_payload = {
                             **ckpt_payload,
@@ -1266,7 +1288,7 @@ def train_tdmpc2(
 
     if ckpt_dir is not None:
         final_payload = {
-            "algo": "tdmpc-glass",
+            "algo": "tdmpc-glass" if use_glass else "tdmpc2",
             "env_id": env_id,
             "seed": seed,
             "env_steps": env_steps,
@@ -1276,8 +1298,9 @@ def train_tdmpc2(
             "scale": jax.device_get(scale),
             "glass_step": jax.device_get(glass_step),
             "key": jax.device_get(key),
-            "glass_config": dict(glass_cfg),
+            "glass_config": dict(glass_cfg) if use_glass else {},
             "best_mppi": best_mppi,
+            "best_mppi_step": best_mppi_step,
         }
         save_pickle_atomic(ckpt_dir / "final.pkl", final_payload)
         if save_full_state:
@@ -1310,9 +1333,9 @@ def parse_args():
     ap.add_argument("--no_plot",     action="store_true",
                     help="Skip plotting after training")
     ap.add_argument("--resume_checkpoint", type=str, default=None,
-                    help="Resume TD-MPC-Glass model/optimizer state from a pickle checkpoint")
+                    help="Resume TD-MPC2/TD-MPC-Glass model/optimizer state from a pickle checkpoint")
     ap.add_argument("--save_full_state", action="store_true",
-                    help="Save replay buffer, vectorized env state, and RNG state for exact TD-MPC-Glass resume")
+                    help="Save replay buffer, vectorized env state, and RNG state for exact TD-MPC2/TD-MPC-Glass resume")
     ap.add_argument("--glass_warmup_env_steps", type=int, default=None,
                     help="Override TD-MPC-Glass warmup_env_steps")
     ap.add_argument("--glass_every_k_updates", type=int, default=None,
@@ -1346,6 +1369,9 @@ def parse_args():
                          "whether stuck seeds are search-failure (limited samples) vs learning-failure.")
     ap.add_argument("--mppi_horizon", type=int, default=None,
                     help="Override MPPI horizon H (and training seq_len=H+1). Default: DEFAULTS['H']=3")
+    ap.add_argument("--k_update", type=int, default=None,
+                    help="Override TD-MPC2 K_UPDATE, the number of gradient updates per env batch. "
+                         "Default: DEFAULTS['K_UPDATE']=64. Iteration 7 fair sweep tests 128 and 256.")
     ap.add_argument("--q_reset_steps", type=str, default=None,
                     help="Comma-separated env-step thresholds at which to re-init online Q + optimizer (REDQ-style). "
                          "Target Q (tp['q']) and other params are preserved. Example: '1000000,2000000,3000000'.")
@@ -1370,6 +1396,10 @@ def parse_args():
                     help="Override the env_steps duration of initial random exploration (Phase-p, path 1). "
                          "Default: DEFAULTS['EXPL_UNTIL']=25000. Try 500000 to fill replay with diverse "
                          "random rollouts (foot-strike data) before policy takes over.")
+    ap.add_argument("--expl_mix_decay_steps", type=int, default=0,
+                    help="Benchmark-fair exploration schedule: use a per-env random-policy action mixture "
+                         "whose random-action probability decays linearly from 1.0 to 0.0 over N env-steps. "
+                         "When >0, this replaces the hard --expl_until random-action phase.")
     # Hierarchical Glass (iteration-4 §7.4 / Path 10).
     ap.add_argument("--glass_num_super_clusters", type=int, default=None,
                     help="If > 0, enable hierarchical Glass: a second-level partition over the K=8 clusters "
@@ -1478,12 +1508,16 @@ def main():
                         args.seed,
                         csv_path,
                         use_glass=False,
+                        resume_checkpoint=args.resume_checkpoint,
+                        save_full_state=args.save_full_state,
                         mppi_n_samples=args.mppi_n_samples,
+                        k_update=args.k_update,
                         latent_action_smooth_coef=args.latent_action_smooth_coef,
                         consistency_coef=args.consistency_coef,
                         early_stop_patience=args.early_stop_patience,
                         latent_smooth_warmup_env_steps=args.latent_smooth_warmup_env_steps,
                         expl_until=args.expl_until,
+                        expl_mix_decay_steps=args.expl_mix_decay_steps,
                         knee_penalty_coef=args.knee_penalty_coef,
                         knee_penalty_threshold=args.knee_penalty_threshold,
                         gait_fall_penalty=args.gait_fall_penalty,
@@ -1511,6 +1545,7 @@ def main():
                         act_noise_anneal_steps=args.act_noise_anneal_steps,
                         mppi_horizon=args.mppi_horizon,
                         mppi_n_samples=args.mppi_n_samples,
+                        k_update=args.k_update,
                         q_reset_steps=q_reset,
                         latent_action_smooth_coef=args.latent_action_smooth_coef,
                         consistency_coef=args.consistency_coef,
@@ -1518,6 +1553,7 @@ def main():
                         latent_smooth_warmup_env_steps=args.latent_smooth_warmup_env_steps,
                         glass_decay_steps=args.glass_decay_steps,
                         expl_until=args.expl_until,
+                        expl_mix_decay_steps=args.expl_mix_decay_steps,
                         knee_penalty_coef=args.knee_penalty_coef,
                         knee_penalty_threshold=args.knee_penalty_threshold,
                         cluster_intrinsic_coef=args.cluster_intrinsic_coef,

@@ -35,14 +35,14 @@ is_box_busy() {
   local tag=$1 port=${BOX_PORT[$1]} host=${BOX_HOST[$1]} gpumask=${BOX_GPUMASK[$1]}
   if [[ -z "$gpumask" ]]; then
     # Single-GPU box — any benchmark process counts as busy
-    local n=$(ssh -p "$port" -o StrictHostKeyChecking=no -o ConnectTimeout=8 -o BatchMode=yes \
+    local n=$(ssh -i /home/coder/.ssh/id_ed25519 -p "$port" -o StrictHostKeyChecking=no -o ConnectTimeout=8 -o BatchMode=yes \
               root@"$host" "ps -eo cmd | grep -E 'run_benchmark' | grep -v grep | wc -l" 2>/dev/null)
     [[ -z "$n" ]] && return 0  # SSH unreachable → treat as busy
     [[ "$n" -gt 0 ]]
   else
     # Shared box, slot-specific: check GPU memory on its CUDA index
     local cuda_idx=${gpumask##*=}
-    local mem=$(ssh -p "$port" -o StrictHostKeyChecking=no -o ConnectTimeout=8 -o BatchMode=yes \
+    local mem=$(ssh -i /home/coder/.ssh/id_ed25519 -p "$port" -o StrictHostKeyChecking=no -o ConnectTimeout=8 -o BatchMode=yes \
                 root@"$host" "nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i $cuda_idx 2>/dev/null" 2>/dev/null)
     [[ -z "$mem" ]] && return 0  # SSH unreachable
     [[ "$mem" -gt 100 ]]  # > 100 MiB = busy
@@ -81,12 +81,17 @@ while true; do
     next=$(pop_next_queue_line "$qf") || { echo "[autoqueue] $(ts) $tag idle, queue empty"; continue; }
     IFS='|' read -r port host launcher envvars <<< "$next"
     echo "[autoqueue] $(ts) $tag idle → launching: $envvars bash $launcher"
+    # Build remote_cmd in a variable first so the local shell does NOT word-split
+    # $envvars (variable assignment never triggers word-splitting). If we embed
+    # $envvars directly inside "double quotes" passed to ssh, the local shell
+    # splits on spaces inside quoted values like SEEDS="1 2 3" → broken.
+    remote_cmd="cd /root/helios-rl ; $envvars nohup setsid bash $launcher > /tmp/autoqueue_${tag}.log 2>&1 < /dev/null & disown ; sleep 1"
     # Use `ssh -f` (background after auth) so SSH session detaches once the remote
     # `nohup setsid ... &` has been launched. Without -f, ssh holds the channel
     # open until the remote process closes its stdout, which can hang the queue
     # for hours.
-    ssh -f -n -p "$port" -o StrictHostKeyChecking=no -o ConnectTimeout=15 root@"$host" \
-        "cd /root/helios-rl ; $envvars nohup setsid bash $launcher > /tmp/autoqueue_${tag}.log 2>&1 < /dev/null & disown ; sleep 1" \
+    ssh -f -n -i /home/coder/.ssh/id_ed25519 -p "$port" -o StrictHostKeyChecking=no -o ConnectTimeout=15 root@"$host" \
+        "$remote_cmd" \
         >/dev/null 2>&1 || echo "[autoqueue] $(ts) $tag ssh launch returned non-zero (continuing)"
   done
   sleep 300

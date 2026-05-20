@@ -16,9 +16,12 @@ Stop with Ctrl-C. Single-process Flask; for development / single-user only.
 from __future__ import annotations
 
 import csv
+import fcntl
 import json
+import math
 import os
 import re
+import shlex
 import subprocess
 import threading
 import time
@@ -33,6 +36,12 @@ MIRROR = LOCAL_EXP / "remote_mirror"
 VIDEO_OUT = REPO / "exp" / "tdmpc_glass" / "rollout_videos"
 VIDEO_OUT.mkdir(parents=True, exist_ok=True)
 EXISTING_VIDEOS_ROOT = REPO / "exp" / "tdmpc_glass" / "videos"
+QUEUE_DIR = REPO / "scripts" / "queues"
+CENTRAL_QUEUE_FILE = QUEUE_DIR / "central_queue.json"
+
+# SSH key: remotes accept root@ login with coder's key (coder's pubkey was deployed to remote authorized_keys)
+SSH_KEY = os.environ.get("SSH_IDENTITY_FILE", "/home/coder/.ssh/id_ed25519")
+SSH_OPTS = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
 
 # ─── Box registry. Mirrors scripts/iter5_dashboard.sh BOXES. ────────────
 BOXES = [
@@ -46,6 +55,71 @@ BOXES = [
     ("ssh6_3080",     16779,   "ssh6.vast.ai",   0, "ssh6:16779 3080 (10GB)"),
     ("ssh3_3060ti",   11271,   "ssh3.vast.ai",   0, "ssh3:11271 3060Ti (8GB)"),
 ]
+
+# Render workers scan the whole fleet dynamically. Keep local last so training
+# on the dashboard host is disturbed only when it is truly idle.
+RENDER_MEM_FRACTION = {
+    "ssh17637_gpu0": "0.75",
+    "ssh17637_gpu1": "0.75",
+    "ssh6_4060": "0.70",
+    "ssh3_3060ti": "0.55",
+    "ssh3_3070": "0.55",
+    "ssh6_3080": "0.65",
+    "ssh1_2080ti": "0.75",
+    "local": "0.70",
+}
+RENDER_POLL_SECONDS = 30
+RENDER_DISPATCH_LOCK = threading.Lock()
+
+# Keyed by CANONICAL phase name (after canonical_phase() normalization).
+PHASE_NOTES: dict[str, str] = {
+    # Iter 1 baselines
+    "pre_phase1":   "Very early Glass baseline runs",
+    "phase1b":      "Glass baseline: [438,526,294,187,562] mean=401",
+    "phase1c":      "Act-noise anneal 0.30->0.10; FALSIFIED: hurts winners",
+    "phase2":       "Early iteration 2 runs",
+    # Iter 2 (phases d-h)
+    "phased":       "H=5+noise=0.40 (Warp-901) or H=5-only (plateau 199); FALSIFIED",
+    "phasee":       "Q-reset (impl bug: zeroed all opt state); FALSIFIED",
+    "phasef":       "Smooth=1e-3; s1=571 first>500 ever; s2-5 plateau 255-284",
+    "phaseg":       "Consistency coef=1.0; best 482 (s2), none>500",
+    "phaseh":       "Smooth=1e-3 + ccoef=1.0; peak 490, plateau",
+    "phasei":       "Smooth=1e-4 (too weak); peak 312",
+    # Iter 3 (phases j-o)
+    "phasej":       "Curriculum smooth (off<250k); s2=518 winner; 12% hit rate",
+    "phasek":       "Smooth + lambda_temporal=0.05 (over-reg); peak 292",
+    "phasel":       "tdmpc2 + smooth, Glass zeroed; peak 289; Glass IS needed",
+    "phasem":       "Python-cond smooth graph; s4 K=3->K=4 rescued",
+    "phasen":       "Proto temp=0.4 sharper; basin still K=3; FALSIFIED",
+    "phaseo":       "Glass OFF after 2M hybrid; s3=577 winner; 1/3>500",
+    # Iter 4 (paths 1,5,7,9,10,P,Pa)
+    "phasep":       "EXPL_UNTIL=500k random explore; s4=538 slow-burn; 1/3>500",
+    "phaset":       "Knee penalty reward shaping; 2/3>500, max=612 G2 (benchmark-unfair)",
+    "phasev":       "Cluster soft-dist as pi/q obs (Path 7); peak 232; FALSIFIED (drift)",
+    "phasex":       "NS=2048 MPPI; s3=523, s8~500; ~40% G1 hit rate",
+    "phasex_ns1024":"NS=1024 compromise for 6GB GPU; lower ceiling than 2048",
+    "phasey":       "Hierarchical Glass K_super=4 (Path 10); peak 462; 0/3>500",
+    "phasePP":      "Cluster entropy intrinsic (static 0.1); FALSIFIED: peak 91 collapsed",
+    "phasePa":      "Cluster entropy intrinsic (decayed [500k,3M]->0); FALSIFIED: peak 25",
+    # Iter 6
+    "phasez":       "Vanilla tdmpc2 baseline (NS=512, no Glass, no shaping)",
+    "phaseq_knee":  "Knee penalty + NS=2048 no Glass; 4/12>500 (33%), max=557",
+    "phaser1_soft": "Soft stand bonus 0.1 annealed->0@3M; 1/5>500 (20%), max=553",
+    "phaser2_gait": "Gait fall penalty + action smooth; 1/4>500, max=510",
+    "phaserstack":  "ALL shaping stacked; COLLAPSED (MPPI~5-16, all seeds)",
+    "phaserstack_nosmooth": "Stack ablation A: drop action_smooth",
+    "phaserstack_nosoft":   "Stack ablation B: drop soft_stand_bonus",
+    # Iter 7 - benchmark-fair K_UPDATE sweep
+    "phaseaa_codex_tdmpc2_k64":  "K_UPDATE=64 tdmpc2; ~0.25 updates/env-step",
+    "phaseaa_codex_tdmpc2_k128": "K_UPDATE=128 tdmpc2; ~0.5 updates/env-step",
+    "phaseaa_codex_tdmpc2_k256": "K_UPDATE=256 tdmpc2; ~1.0 update/env-step (official rate)",
+    "phaseab_codex_tdmpc2_5seed":"K_UPDATE winner, 5-seed vanilla tdmpc2",
+    "phaseac_codex_glass_5seed": "K_UPDATE winner, 5-seed Glass vs tdmpc2 comparison",
+    "phasead_codex_explmix":     "Fair expl-mix: random action prob 1->0 over 2M steps",
+    # Smoke tests
+    "smoke":        "Smoke test (hardware validation only)",
+}
+RESERVED_RENDER_TARGETS: set[str] = set()
 
 
 def parse_etime_seconds(etime: str) -> int | None:
@@ -154,7 +228,7 @@ def probe_box(tag, port, host, gpu_idx):
             )
         else:
             res = subprocess.run(
-                ["ssh", "-p", str(port),
+                ["ssh", "-p", str(port), "-i", SSH_KEY,
                  "-o", "StrictHostKeyChecking=no",
                  "-o", "ConnectTimeout=8",
                  "-o", "BatchMode=yes",
@@ -168,6 +242,159 @@ def probe_box(tag, port, host, gpu_idx):
         return {"reachable": False, "error": "ssh-timeout", "procs": []}
     except Exception as e:
         return {"reachable": False, "error": str(e), "procs": []}
+
+
+def render_candidates():
+    """Return render-capable boxes in dynamic priority order."""
+    remotes = [b for b in BOXES if b[0] != "local"]
+    local = [b for b in BOXES if b[0] == "local"]
+    return remotes + local
+
+
+def is_render_target_idle(tag: str, port, host, gpu_idx: int) -> tuple[bool, str]:
+    """Return whether a render target's specific GPU looks idle enough to use."""
+    try:
+        if tag in RESERVED_RENDER_TARGETS:
+            return False, f"{tag}: reserved for another render"
+        if tag == "local":
+            mem_cmd = ["nvidia-smi", "--query-gpu=memory.used",
+                       "--format=csv,noheader,nounits", "-i", str(gpu_idx)]
+            proc_cmd = "ps -eo cmd | grep -E 'render_glass_rollout|run_benchmark' | grep -v grep | wc -l"
+            mem_res = subprocess.run(mem_cmd, capture_output=True, text=True, timeout=5)
+            proc_res = subprocess.run(["bash", "-c", proc_cmd], capture_output=True, text=True, timeout=5)
+        else:
+            remote = (
+                f"nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i {gpu_idx}; "
+                "ps -eo cmd | grep -E 'render_glass_rollout' | grep -v grep | wc -l"
+            )
+            res = subprocess.run(
+                ["ssh", "-p", str(port), "-i", SSH_KEY, "-o", "StrictHostKeyChecking=no",
+                 "-o", "ConnectTimeout=6", "-o", "BatchMode=yes",
+                 f"root@{host}", remote],
+                capture_output=True, text=True, timeout=10,
+            )
+            lines = [x.strip() for x in res.stdout.splitlines() if x.strip()]
+            if res.returncode != 0 or len(lines) < 2:
+                return False, f"{tag}: unreachable"
+            mem_res = type("R", (), {"stdout": lines[0], "returncode": 0})()
+            proc_res = type("R", (), {"stdout": lines[1], "returncode": 0})()
+        mem = int(str(mem_res.stdout).strip().splitlines()[0])
+        render_procs = int(str(proc_res.stdout).strip().splitlines()[0])
+        if render_procs > 0:
+            return False, f"{tag}: render already running"
+        if mem > 250:
+            return False, f"{tag}: gpu{gpu_idx} mem {mem} MiB"
+        return True, f"{tag}: gpu{gpu_idx} idle ({mem} MiB)"
+    except Exception as e:
+        return False, f"{tag}: {e}"
+
+
+def choose_render_target() -> dict:
+    reasons = []
+    with RENDER_DISPATCH_LOCK:
+        for tag, port, host, gpu_idx, _label in render_candidates():
+            idle, reason = is_render_target_idle(tag, port, host, gpu_idx)
+            reasons.append(reason)
+            if idle:
+                RESERVED_RENDER_TARGETS.add(tag)
+                return {
+                    "tag": tag, "port": port, "host": host, "gpu_idx": gpu_idx,
+                    "mem_frac": RENDER_MEM_FRACTION.get(tag, "0.60"),
+                    "reasons": reasons,
+                }
+    return {"tag": None, "reasons": reasons}
+
+
+def release_render_target(target: dict | None):
+    tag = (target or {}).get("tag")
+    if not tag:
+        return
+    with RENDER_DISPATCH_LOCK:
+        RESERVED_RENDER_TARGETS.discard(tag)
+
+
+def launch_next_queue_line(tag: str) -> str:
+    """Best-effort one-shot queue launch for a just-freed render target."""
+    if tag == "local":
+        return "local has no queue file"
+    qf = QUEUE_DIR / f"{tag}.queue"
+    if not qf.exists():
+        return f"{tag}: no queue file"
+    try:
+        lines = qf.read_text().splitlines()
+        picked_idx = None
+        picked = None
+        for i, line in enumerate(lines):
+            if not line or line.startswith("#"):
+                continue
+            picked_idx = i
+            picked = line
+            break
+        if picked_idx is None or picked is None:
+            return f"{tag}: queue empty"
+        parts = picked.split("|", 3)
+        if len(parts) != 4:
+            return f"{tag}: malformed queue line"
+        port, host, launcher, envvars = parts
+        lines[picked_idx] = f"# DONE {time.strftime('%H:%M:%SZ', time.gmtime())} {picked}"
+        qf.write_text("\n".join(lines) + "\n")
+        cmd = [
+            "ssh", "-f", "-n", "-p", port, "-i", SSH_KEY,
+            "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=15",
+            f"root@{host}",
+            f"cd /root/helios-rl ; {envvars} nohup setsid bash {launcher} "
+            f"> /tmp/dashboard_queue_{tag}.log 2>&1 < /dev/null & disown ; sleep 1",
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if res.returncode != 0:
+            return f"{tag}: queue launch returned {res.returncode}: {res.stderr.strip()}"
+        return f"{tag}: launched queued task {envvars} bash {launcher}"
+    except Exception as e:
+        return f"{tag}: queue kick failed: {e}"
+
+
+def infer_render_error_type(log_lines: list[str]) -> str:
+    text = "\n".join(log_lines[-80:]).lower()
+    if "out of memory" in text or "resource_exhausted" in text or "failed to allocate" in text:
+        return "OOM"
+    if "cuda" in text or "jaxruntimeerror" in text:
+        return "CUDA/JAX"
+    if "no such file" in text or "checkpoint" in text or "pickle" in text:
+        return "checkpoint"
+    if "timeout" in text or "ssh" in text:
+        return "remote/ssh"
+    if "exception:" in text or "traceback" in text:
+        return "exception"
+    return "failed"
+
+
+# ─── Phase name normalization ─────────────────────────────────────────────
+
+# Strips device/run-variant suffixes so seeds from the same logical experiment
+# but run on different hardware are grouped under one canonical phase name.
+# Examples: phasex_local → phasex, phasem_remote → phasem, phasep_remote_3m → phasep
+_CANON_DEVICE_RE = re.compile(
+    r"(?:_(?:local|remote|baseline))*"   # _local, _remote, _baseline
+    r"(?:_(?:\d*x)?\d+(?:ti|lap)?)*"    # _4060, _3060ti, _2x3060, _2080ti
+    r"(?:_gpu\d+)*"                       # _gpu0, _gpu1
+    r"(?:_3m)?"                           # _3m after _remote
+    r"$",
+    re.IGNORECASE,
+)
+_CANON_VERSION_RE = re.compile(
+    r"_v\d+(?:_[a-z0-9]+)*$",
+    re.IGNORECASE,
+)
+
+
+def canonical_phase(phase: str) -> str:
+    """Strip device/hardware and run-variant suffixes to get canonical family name.
+
+    Preserved: _ns1024, _nosmooth, _nosoft, _codex_*, _knee, _soft, _gait, _stack.
+    """
+    result = _CANON_DEVICE_RE.sub("", phase)
+    result = _CANON_VERSION_RE.sub("", result)
+    return result or phase
 
 
 # ─── CSV discovery ────────────────────────────────────────────────────────
@@ -323,8 +550,28 @@ def discover_existing_videos():
                 "size_mb": round(st.st_size / 1e6, 1),
                 "source": "archive",
             })
-    # Also surface rollout_videos/ produced by this dashboard, keyed via JOBS.
-    # Those are already accessible via /videos/<id>.mp4 from render jobs.
+    # Surface dashboard-produced rollout_videos across dashboard restarts via
+    # sidecar metadata written when each render completes.
+    for meta_path in VIDEO_OUT.glob("*.json"):
+        try:
+            meta = json.loads(meta_path.read_text())
+            mp4 = VIDEO_OUT / f"{meta_path.stem}.mp4"
+            if not mp4.exists():
+                continue
+            st = mp4.stat()
+            phase = str(meta.get("phase") or "")
+            seed = str(meta.get("seed") or "")
+            if not phase or not seed:
+                continue
+            by_key.setdefault((phase, seed), []).append({
+                "label": f"job-{meta_path.stem}",
+                "url": f"/videos/{mp4.name}",
+                "mtime": st.st_mtime,
+                "size_mb": round(st.st_size / 1e6, 1),
+                "source": "dashboard",
+            })
+        except Exception:
+            continue
     for lst in by_key.values():
         lst.sort(key=lambda v: v["mtime"], reverse=True)
     return by_key
@@ -332,23 +579,92 @@ def discover_existing_videos():
 
 def render_worker(job_id: str, ckpt: str, env_id: str, camera: str,
                    n_episodes: int, episode_length: int):
-    """Spawn render_glass_rollout.py, stream stdout → progress."""
+    """Spawn render_glass_rollout.py, stream stdout → progress.
+
+    Rendering is CUDA-heavy and used to run on the dashboard host, where it
+    collided with training. Prefer an idle remote GPU, copy the checkpoint to a
+    temp directory, render there, then pull the mp4 back into VIDEO_OUT.
+    """
     out_mp4 = VIDEO_OUT / f"{job_id}.mp4"
-    cmd = [
+    target = None
+    while True:
+        target = choose_render_target()
+        if target and target.get("tag"):
+            break
+        with JOBS_LOCK:
+            JOBS[job_id]["status"] = "queued"
+            JOBS[job_id]["progress"] = 0.0
+            JOBS[job_id]["log"].append(
+                f"waiting for an idle render GPU; checking again in {RENDER_POLL_SECONDS}s"
+            )
+            for reason in (target or {}).get("reasons", []):
+                JOBS[job_id]["log"].append(f"probe: {reason}")
+        time.sleep(RENDER_POLL_SECONDS)
+    base_cmd = [
         "/root/venv/bin/python3", "-u", "scripts/render_glass_rollout.py",
         "--ckpt", ckpt, "--env_id", env_id,
         "--out", str(out_mp4), "--camera", camera,
         "--n_episodes", str(n_episodes),
         "--episode_length", str(episode_length),
     ]
-    env = {**os.environ, "MUJOCO_GL": "egl",
-           "PYTHONPATH": "/root/helios-rl/src:/root/mujoco_playground_repo"}
+    env = {
+        **os.environ,
+        "MUJOCO_GL": "egl",
+        "PYTHONPATH": "/root/helios-rl/src:/root/mujoco_playground_repo",
+        "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+        "XLA_PYTHON_CLIENT_MEM_FRACTION": target["mem_frac"],
+        "CUDA_VISIBLE_DEVICES": str(target["gpu_idx"]),
+    }
     with JOBS_LOCK:
         JOBS[job_id]["status"] = "running"
-        JOBS[job_id]["cmd"] = " ".join(cmd)
+        JOBS[job_id]["render_host"] = target["tag"]
+        JOBS[job_id]["log"].extend([f"render target: {target['tag']}",
+                                    *[f"probe: {r}" for r in target.get("reasons", [])]])
     try:
+        cleanup_cmd = None
+        if target["tag"] == "local":
+            cmd = base_cmd
+            run_cwd = str(REPO)
+            popen_env = env
+            with JOBS_LOCK:
+                JOBS[job_id]["cmd"] = " ".join(cmd)
+        else:
+            remote_dir = f"/tmp/helios_render_{job_id}"
+            remote_ckpt = f"{remote_dir}/ckpt.pkl"
+            remote_out = f"{remote_dir}/{job_id}.mp4"
+            ssh_base = [
+                "ssh", "-p", str(target["port"]), "-i", SSH_KEY, "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=15", f"root@{target['host']}",
+            ]
+            rsync_base = ["rsync", "-a", "-e",
+                          f"ssh -p {target['port']} -i {SSH_KEY} -o StrictHostKeyChecking=no -o ConnectTimeout=15"]
+            subprocess.run(ssh_base + [f"mkdir -p {shlex.quote(remote_dir)}"],
+                           check=True, capture_output=True, text=True, timeout=30)
+            subprocess.run(rsync_base + [ckpt, f"root@{target['host']}:{remote_ckpt}"],
+                           check=True, capture_output=True, text=True, timeout=120)
+            remote_cmd = [
+                "cd /root/helios-rl &&",
+                f"MUJOCO_GL=egl",
+                "PYTHONPATH=/root/helios-rl/src:/root/mujoco_playground_repo",
+                "XLA_PYTHON_CLIENT_PREALLOCATE=false",
+                f"XLA_PYTHON_CLIENT_MEM_FRACTION={shlex.quote(target['mem_frac'])}",
+                f"CUDA_VISIBLE_DEVICES={target['gpu_idx']}",
+                "/root/venv/bin/python3 -u scripts/render_glass_rollout.py",
+                "--ckpt", shlex.quote(remote_ckpt),
+                "--env_id", shlex.quote(env_id),
+                "--out", shlex.quote(remote_out),
+                "--camera", shlex.quote(camera),
+                "--n_episodes", str(n_episodes),
+                "--episode_length", str(episode_length),
+            ]
+            cmd = ssh_base + [" ".join(remote_cmd)]
+            run_cwd = str(REPO)
+            popen_env = os.environ.copy()
+            cleanup_cmd = ssh_base + [f"rm -rf {shlex.quote(remote_dir)}"]
+            with JOBS_LOCK:
+                JOBS[job_id]["cmd"] = " ".join(cmd)
         proc = subprocess.Popen(
-            cmd, cwd=str(REPO), env=env,
+            cmd, cwd=run_cwd, env=popen_env,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
@@ -363,18 +679,47 @@ def render_worker(job_id: str, ckpt: str, env_id: str, camera: str,
                     eps_done += 1
                     # account for both rollout + render passes (~2x the work)
                     JOBS[job_id]["progress"] = min(eps_done / (2 * n_episodes), 0.95)
+                elif m := re.search(r"rollout \d+: step=(\d+)/(\d+)", line):
+                    done = int(m.group(1))
+                    total = max(int(m.group(2)), 1)
+                    JOBS[job_id]["progress"] = min(0.5 * done / total, 0.49)
                 elif "wrote " in line and "frames" in line:
                     JOBS[job_id]["progress"] = 0.99
         proc.wait()
+        if target["tag"] != "local" and proc.returncode == 0:
+            remote_out_ref = f"root@{target['host']}:/tmp/helios_render_{job_id}/{job_id}.mp4"
+            subprocess.run(
+                ["rsync", "-a", "-e",
+                 f"ssh -p {target['port']} -i {SSH_KEY} -o StrictHostKeyChecking=no -o ConnectTimeout=15",
+                 remote_out_ref, str(out_mp4)],
+                check=True, capture_output=True, text=True, timeout=120,
+            )
+        if cleanup_cmd:
+            subprocess.run(cleanup_cmd, capture_output=True, text=True, timeout=30)
         with JOBS_LOCK:
             JOBS[job_id]["progress"] = 1.0
             ok = (proc.returncode == 0 and out_mp4.exists())
             JOBS[job_id]["status"] = "done" if ok else "failed"
             JOBS[job_id]["video"] = f"/videos/{job_id}.mp4" if out_mp4.exists() else None
+            if not ok:
+                JOBS[job_id]["error_type"] = infer_render_error_type(JOBS[job_id].get("log", []))
+            if ok:
+                (VIDEO_OUT / f"{job_id}.json").write_text(json.dumps({
+                    "job_id": job_id,
+                    "phase": JOBS[job_id].get("phase"),
+                    "seed": JOBS[job_id].get("seed"),
+                    "render_host": target.get("tag"),
+                    "created_at": time.time(),
+                }))
+                JOBS[job_id]["log"].append(launch_next_queue_line(target["tag"]))
     except Exception as e:
         with JOBS_LOCK:
             JOBS[job_id]["status"] = "failed"
             JOBS[job_id]["log"].append(f"EXCEPTION: {e}")
+            JOBS[job_id]["error_type"] = infer_render_error_type(JOBS[job_id].get("log", []))
+            JOBS[job_id]["progress"] = 1.0
+    finally:
+        release_render_target(target)
 
 
 # ─── Flask app ───────────────────────────────────────────────────────────
@@ -561,7 +906,7 @@ def api_render():
     env_id = data.get("env_id", "HopperHop")
     camera = data.get("camera", "cam0")
     n_episodes = int(data.get("n_episodes", 2))
-    episode_length = int(data.get("episode_length", 200))
+    episode_length = int(data.get("episode_length", 1000))
     if not phase or seed is None:
         return jsonify({"error": "phase + seed required"}), 400
     ckpt = find_best_ckpt(phase, str(seed))
@@ -634,11 +979,447 @@ def api_jobs():
                 "status": j.get("status"),
                 "progress": j.get("progress"),
                 "video": j.get("video"),
+                "render_host": j.get("render_host"),
+                "error_type": j.get("error_type"),
                 "started_at": j.get("started_at"),
-                "log_tail": j.get("log", [])[-3:],
+                "log_tail": j.get("log", [])[-8:],
             })
     items.sort(key=lambda r: -(r.get("started_at") or 0))
     return jsonify({"jobs": items})
+
+
+@app.route("/api/phases")
+def api_phases():
+    """Per-CANONICAL-phase aggregated MPPI stats.
+
+    Seeds from phasex_local, phasex_4060, phasex_2x3060, etc. are all merged
+    under canonical name "phasex" so the browser shows one aggregated row.
+    """
+    csvs = discover_csvs()
+    # Group by canonical phase name; track raw variant names for tooltip
+    by_canon: dict[str, dict] = {}
+    for c in csvs:
+        canon = canonical_phase(c["phase"])
+        entry = by_canon.setdefault(canon, {"paths": [], "variants": set()})
+        entry["paths"].append(c["path"])
+        if c["phase"] != canon:
+            entry["variants"].add(c["phase"])
+    out = []
+    for canon, info in sorted(by_canon.items()):
+        paths = info["paths"]
+        variants = sorted(info["variants"])
+        bests = []
+        for path in paths:
+            best, _, _, _ = best_and_last(path)
+            if best >= 0:
+                bests.append(best)
+        n = len(bests)
+        mean_b = sum(bests) / n if n else None
+        std_b = (sum((b - mean_b) ** 2 for b in bests) / n) ** 0.5 if n > 1 else None
+        mx = max(bests) if bests else None
+        n_g1 = sum(1 for b in bests if b >= 500)
+        out.append({
+            "phase": canon,
+            "variants": variants,
+            "n_seeds": len(paths),
+            "n_with_data": n,
+            "mean_best": round(mean_b, 1) if mean_b is not None else None,
+            "std_best": round(std_b, 1) if std_b is not None else None,
+            "max_best": round(mx, 1) if mx is not None else None,
+            "n_g1": n_g1,
+            "notes": PHASE_NOTES.get(canon, ""),
+        })
+    out.sort(key=lambda r: -(r["mean_best"] or -1))
+    return jsonify({"phases": out})
+
+
+def _phase_matches(canon: str, tokens: list[str]) -> bool:
+    """True if canon phase matches any of the filter tokens (substring)."""
+    if not tokens:
+        return True
+    return any(t in canon for t in tokens)
+
+
+@app.route("/api/phase_ci")
+def api_phase_ci():
+    """Per-CANONICAL-phase 95% CI curves.
+
+    Query params:
+      phase — comma-separated filter tokens; each token is a substring of the
+              canonical phase name. Empty = top-10 by max MPPI.
+              E.g. ?phase=phasex,phaset  shows two separate CI bands.
+    """
+    csvs = discover_csvs()
+    raw_filter = request.args.get("phase", "").strip()
+    tokens = [t.strip() for t in raw_filter.split(",") if t.strip()] if raw_filter else []
+
+    # Group seed curves by CANONICAL phase name (merges device variants)
+    by_canon: dict[str, list] = {}
+    for c in csvs:
+        canon = canonical_phase(c["phase"])
+        if tokens and not _phase_matches(canon, tokens):
+            continue
+        pts = [p for p in read_curve(c["path"]) if p["eval_type"] == "mppi"]
+        if pts:
+            by_canon.setdefault(canon, []).append(pts)
+
+    # When no filter, cap at top-10 by max reward
+    if not tokens and len(by_canon) > 10:
+        def _max_reward(curves):
+            return max(p["reward"] for pts in curves for p in pts)
+        ranked = sorted(by_canon.items(), key=lambda kv: -_max_reward(kv[1]))
+        by_canon = dict(ranked[:10])
+
+    out = []
+    for canon, seed_curves in sorted(by_canon.items()):
+        all_steps = sorted({p["step"] for pts in seed_curves for p in pts})
+        if len(all_steps) > 150:
+            stride = max(1, len(all_steps) // 150)
+            all_steps = all_steps[::stride]
+        rows = []
+        for qs in all_steps:
+            vals = []
+            for pts in seed_curves:
+                v = next((p["reward"] for p in reversed(pts) if p["step"] <= qs), None)
+                if v is not None:
+                    vals.append(v)
+            if not vals:
+                continue
+            n = len(vals)
+            mean = sum(vals) / n
+            if n > 1:
+                var = sum((v - mean) ** 2 for v in vals) / (n - 1)
+                se = math.sqrt(var / n)
+                margin = 1.96 * se
+            else:
+                margin = 0.0
+            rows.append({"step": qs, "mean": round(mean, 2),
+                         "lower": round(mean - margin, 2),
+                         "upper": round(mean + margin, 2), "n": n})
+        if rows:
+            out.append({"phase": canon, "n_seeds": len(seed_curves), "rows": rows,
+                        "notes": PHASE_NOTES.get(canon, "")})
+    return jsonify({"ci_curves": out})
+
+
+# ─── Central task queue API ────────────────────────────────────────────────
+
+def _load_central_queue() -> list[dict]:
+    if not CENTRAL_QUEUE_FILE.exists():
+        return []
+    try:
+        return json.loads(CENTRAL_QUEUE_FILE.read_text())
+    except Exception:
+        return []
+
+
+def _save_central_queue(tasks: list[dict]):
+    CENTRAL_QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CENTRAL_QUEUE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(tasks, indent=2))
+    tmp.replace(CENTRAL_QUEUE_FILE)
+
+
+def _with_queue_lock(fn):
+    lock_path = CENTRAL_QUEUE_FILE.with_suffix(".lock")
+    with open(lock_path, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            tasks = _load_central_queue()
+            result = fn(tasks)
+            if result is not None:
+                _save_central_queue(result)
+            return tasks if result is None else result
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
+
+
+DEFAULT_TASK_DURATION_S = 14400  # 4-hour fallback when no historical data
+
+
+def _compute_queue_etas(tasks: list[dict]) -> tuple[list[dict], str | None]:
+    """Add elapsed/remaining/eta fields to each task. Returns (annotated, queue_eta_iso)."""
+    import heapq
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+
+    def parse_iso(s):
+        if not s:
+            return None
+        try:
+            return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+
+    def to_iso(dt: datetime) -> str:
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Per-launcher average duration from done tasks with both timestamps.
+    launcher_durs: dict[str, list[float]] = {}
+    for t in tasks:
+        if t["status"] == "done" and t.get("started_at") and t.get("ended_at"):
+            s, e = parse_iso(t["started_at"]), parse_iso(t["ended_at"])
+            if s and e and e > s:
+                launcher_durs.setdefault(t.get("launcher", ""), []).append((e - s).total_seconds())
+    avg_dur: dict[str, float] = {l: sum(ds) / len(ds) for l, ds in launcher_durs.items()}
+
+    def est_dur(task) -> float:
+        return avg_dur.get(task.get("launcher", ""), DEFAULT_TASK_DURATION_S)
+
+    # Box free-at times: running tasks → started_at + est_dur; idle boxes → now.
+    all_tags = [b[0] for b in BOXES]
+    box_free: dict[str, datetime] = {tag: now for tag in all_tags}
+    for t in tasks:
+        if t["status"] == "running" and t.get("box") and t.get("started_at"):
+            s = parse_iso(t["started_at"])
+            if s:
+                box_free[t["box"]] = max(s + timedelta(seconds=est_dur(t)), now)
+
+    # Simulate pending task scheduling with a min-heap of (free_time, box_tag).
+    heap = [(ts, tag) for tag, ts in box_free.items()]
+    heapq.heapify(heap)
+    pending_sorted = sorted(
+        [t for t in tasks if t["status"] == "pending" and t.get("type") != "render"],
+        key=lambda t: (t.get("priority", 10), t.get("created_at", ""))
+    )
+    sched: dict[str, tuple[datetime, datetime]] = {}
+    for t in pending_sorted:
+        if not heap:
+            break
+        free_ts, tag = heapq.heappop(heap)
+        start = max(free_ts, now)
+        finish = start + timedelta(seconds=est_dur(t))
+        sched[t["id"]] = (start, finish)
+        heapq.heappush(heap, (finish, tag))
+
+    # Annotate tasks with ETA fields.
+    result = []
+    for t in tasks:
+        t = dict(t)
+        dur = est_dur(t)
+        t["estimated_duration_s"] = int(dur)
+        if t["status"] == "running" and t.get("started_at"):
+            s = parse_iso(t["started_at"])
+            if s:
+                elapsed = (now - s).total_seconds()
+                eta = s + timedelta(seconds=dur)
+                t["elapsed_s"] = int(elapsed)
+                t["remaining_s"] = int(max(0, (eta - now).total_seconds()))
+                t["eta_iso"] = to_iso(eta)
+        elif t["status"] == "pending" and t["id"] in sched:
+            start, finish = sched[t["id"]]
+            t["estimated_start_iso"] = to_iso(start)
+            t["eta_iso"] = to_iso(finish)
+        result.append(t)
+
+    active_etas = [t["eta_iso"] for t in result
+                   if t["status"] in ("running", "pending") and t.get("eta_iso")]
+    queue_eta = max(active_etas) if active_etas else None
+    return result, queue_eta
+
+
+@app.route("/api/queue")
+def api_queue_get():
+    tasks = _load_central_queue()
+    tasks_sorted = sorted(tasks, key=lambda t: (t.get("priority", 10), t.get("created_at", "")))
+    annotated, queue_eta = _compute_queue_etas(tasks_sorted)
+    return jsonify({"tasks": annotated, "queue_eta": queue_eta})
+
+
+@app.route("/api/queue", methods=["POST"])
+def api_queue_add():
+    body = request.get_json(force=True)
+    label = (body.get("label") or "").strip()
+    launcher = (body.get("launcher") or "").strip()
+    env = (body.get("env") or "").strip()
+    priority = int(body.get("priority", 10))
+    if not label or not launcher:
+        return jsonify({"error": "label and launcher are required"}), 400
+    from datetime import datetime, timezone
+    task = {
+        "id": "t" + uuid.uuid4().hex[:7],
+        "label": label,
+        "launcher": launcher,
+        "env": env,
+        "priority": priority,
+        "status": "pending",
+        "box": None,
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "started_at": None,
+        "ended_at": None,
+    }
+    def add(tasks):
+        tasks.append(task)
+        return tasks
+    _with_queue_lock(add)
+    return jsonify({"ok": True, "id": task["id"]})
+
+
+@app.route("/api/queue/<task_id>", methods=["DELETE"])
+def api_queue_delete(task_id):
+    removed = [False]
+    def delete(tasks):
+        nonlocal removed
+        new = [t for t in tasks if t["id"] != task_id]
+        removed[0] = len(new) < len(tasks)
+        return new
+    _with_queue_lock(delete)
+    if not removed[0]:
+        return jsonify({"error": "task not found"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/queue/<task_id>/priority", methods=["POST"])
+def api_queue_priority(task_id):
+    body = request.get_json(force=True)
+    delta = int(body.get("delta", -1))  # negative = higher priority (lower number)
+    def bump(tasks):
+        for t in tasks:
+            if t["id"] == task_id and t["status"] == "pending":
+                t["priority"] = max(1, t["priority"] + delta)
+        return tasks
+    _with_queue_lock(bump)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/queue/<task_id>/retry", methods=["POST"])
+def api_queue_retry(task_id):
+    """Reset a running/failed/done task back to pending so the daemon re-runs it."""
+    from datetime import datetime, timezone
+    def retry(tasks):
+        for t in tasks:
+            if t["id"] == task_id and t["status"] in ("running", "failed", "done"):
+                t["status"] = "pending"
+                t["box"] = None
+                t["started_at"] = None
+                t["ended_at"] = None
+        return tasks
+    _with_queue_lock(retry)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/queue/render", methods=["POST"])
+def api_queue_render_add():
+    """Add a render task to the central queue (type=render, priority=1).
+
+    The local _render_queue_worker thread will pick it up and run render_worker.
+    """
+    from datetime import datetime, timezone
+    body = request.get_json(force=True)
+    phase = (body.get("phase") or "").strip()
+    seed = str(body.get("seed", ""))
+    env_id = body.get("env_id", "HopperHop")
+    camera = body.get("camera", "cam0")
+    n_episodes = int(body.get("n_episodes", 1))
+    episode_length = int(body.get("episode_length", 250))
+    if not phase or not seed:
+        return jsonify({"error": "phase + seed required"}), 400
+    ckpt = find_best_ckpt(phase, seed)
+    if not ckpt:
+        return jsonify({"error": f"no best_mppi.pkl for {phase}/seed_{seed}"}), 404
+    task = {
+        "id": "t" + uuid.uuid4().hex[:7],
+        "label": f"render {phase} s{seed} ({n_episodes}×{episode_length}steps)",
+        "launcher": "render_glass_rollout.py",
+        "env": "",
+        "type": "render",
+        "render_params": {
+            "ckpt": str(ckpt),
+            "env_id": env_id,
+            "camera": camera,
+            "n_episodes": n_episodes,
+            "episode_length": episode_length,
+            "phase": phase,
+            "seed": seed,
+        },
+        "priority": 1,
+        "status": "pending",
+        "box": None,
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "started_at": None,
+        "ended_at": None,
+    }
+    def add(tasks):
+        tasks.append(task)
+        return tasks
+    _with_queue_lock(add)
+    return jsonify({"ok": True, "id": task["id"]})
+
+
+def _render_queue_worker():
+    """Background thread: claims pending render tasks from central_queue and runs them locally."""
+    from datetime import datetime, timezone
+    while True:
+        time.sleep(10)
+        try:
+            tasks = _load_central_queue()
+            pending = [t for t in tasks if t.get("type") == "render" and t["status"] == "pending"]
+            if not pending:
+                continue
+            task = sorted(pending, key=lambda t: (t.get("priority", 10), t.get("created_at", "")))[0]
+
+            def claim(tasks, _id=task["id"]):
+                for t in tasks:
+                    if t["id"] == _id and t["status"] == "pending":
+                        t["status"] = "running"
+                        t["box"] = "local_render"
+                        t["started_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                return tasks
+
+            _with_queue_lock(claim)
+            tasks2 = _load_central_queue()
+            claimed = next((t for t in tasks2 if t["id"] == task["id"] and t["status"] == "running"), None)
+            if not claimed:
+                continue
+
+            rp = claimed.get("render_params", {})
+            ckpt = rp.get("ckpt", "")
+            env_id = rp.get("env_id", "HopperHop")
+            camera = rp.get("camera", "cam0")
+            n_eps = int(rp.get("n_episodes", 1))
+            ep_len = int(rp.get("episode_length", 250))
+            phase = rp.get("phase", "")
+            seed = rp.get("seed", "")
+
+            if not ckpt:
+                def fail_no_ckpt(tasks, _id=task["id"]):
+                    for t in tasks:
+                        if t["id"] == _id:
+                            t["status"] = "failed"
+                            t["ended_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    return tasks
+                _with_queue_lock(fail_no_ckpt)
+                continue
+
+            def _do_render(tid=task["id"], ckpt=ckpt, env_id=env_id, camera=camera,
+                           n_eps=n_eps, ep_len=ep_len, phase=phase, seed=seed):
+                job_id = uuid.uuid4().hex[:10]
+                with JOBS_LOCK:
+                    JOBS[job_id] = {
+                        "phase": phase, "seed": seed, "env_id": env_id, "camera": camera,
+                        "n_episodes": n_eps, "episode_length": ep_len,
+                        "ckpt": ckpt, "status": "queued", "progress": 0.0, "log": [],
+                        "video": None, "started_at": time.time(), "queue_task_id": tid,
+                    }
+                render_worker(job_id, ckpt, env_id, camera, n_eps, ep_len)
+                with JOBS_LOCK:
+                    final_status = JOBS.get(job_id, {}).get("status", "failed")
+
+                def finish(tasks, _id=tid, _status=final_status):
+                    for t in tasks:
+                        if t["id"] == _id:
+                            t["status"] = _status
+                            t["ended_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    return tasks
+                _with_queue_lock(finish)
+
+            threading.Thread(target=_do_render, daemon=True).start()
+        except Exception:
+            pass
+
+
+threading.Thread(target=_render_queue_worker, daemon=True).start()
 
 
 # ─── HTML (Plotly via CDN; vanilla JS fetch) ─────────────────────────────
@@ -681,6 +1462,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .pill{padding:0 6px;border-radius:8px;font-size:10px;margin-left:4px}
   .pill.green{background:#1f3d22;color:#7dd87b}
   .pill.gray{background:#262a35;color:#9099a8}
+  .phase-browser{background:#1b1f2a;border:1px solid var(--line);border-radius:5px;padding:8px 10px;max-height:300px;overflow-y:auto}
+  .phase-info-bar{background:#1b1f2a;border:1px solid var(--line);border-radius:5px;padding:6px 12px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+  .sortable-th{cursor:pointer;user-select:none}
+  .sortable-th:hover{color:var(--accent)}
+  .filter-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
 </style></head><body>
 <header>
   <h1>TD-MPC-Glass Live Dashboard</h1>
@@ -696,17 +1482,53 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </thead><tbody></tbody></table>
   </section>
 
+  <section id="queue-section"><h2>Task Queue
+    <button class="refresh-btn" onclick="loadQueue()">&#x21bb; refresh</button>
+    <button class="refresh-btn" id="add-task-btn" onclick="toggleAddTask()" style="margin-left:4px">+ add task</button>
+    <span id="queue-eta-hdr" class="small" style="opacity:.65;margin-left:10px;font-weight:normal"></span>
+  </h2>
+  <div id="add-task-form" style="display:none;background:#1b1f2a;border:1px solid var(--line);border-radius:5px;padding:10px 14px;margin-bottom:10px">
+    <div style="display:grid;grid-template-columns:1fr 2fr 2fr 80px;gap:8px;align-items:end">
+      <div><label class="small">Priority (lower=first)<br>
+        <input id="at-priority" type="number" value="10" min="1" max="99"
+          style="width:100%;background:#222a3b;color:var(--fg);border:1px solid var(--line);border-radius:3px;padding:3px 6px"></label></div>
+      <div><label class="small">Label<br>
+        <input id="at-label" type="text" placeholder="e.g. phaseab seed 1"
+          style="width:100%;background:#222a3b;color:var(--fg);border:1px solid var(--line);border-radius:3px;padding:3px 6px"></label></div>
+      <div><label class="small">Launcher script<br>
+        <input id="at-launcher" type="text" placeholder="scripts/run_phase1b_10m.sh"
+          style="width:100%;background:#222a3b;color:var(--fg);border:1px solid var(--line);border-radius:3px;padding:3px 6px"></label></div>
+      <div><button onclick="addTask()" style="width:100%;padding:6px 0">Add</button></div>
+    </div>
+    <div style="margin-top:6px"><label class="small">Env vars (optional)<br>
+      <input id="at-env" type="text" placeholder="SEEDS=1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75"
+        style="width:100%;background:#222a3b;color:var(--fg);border:1px solid var(--line);border-radius:3px;padding:3px 6px"></label></div>
+    <div id="at-error" class="small box-bad" style="display:none;margin-top:6px"></div>
+  </div>
+  <table id="queue-table"><thead>
+    <tr><th style="width:50px">Pri</th><th>Label</th><th style="width:80px">Status</th><th style="width:90px">Box</th><th style="width:170px">ETA / Progress</th><th style="width:90px">Actions</th></tr>
+  </thead><tbody></tbody></table>
+  <div id="queue-empty" class="small" style="display:none;padding:6px;color:var(--muted)">Queue is empty.</div>
+  </section>
+
   <section><h2>Learning Curves <span class="small" id="curves-count"></span>
     <button class="refresh-btn" onclick="loadCurves()">&#x21bb; refresh</button></h2>
-    <div class="small" style="margin-bottom:8px">
-      Filter:
-      <label><input type="checkbox" id="only-mppi" checked> only MPPI evals</label>
-      &nbsp;&nbsp;
-      <label><input type="checkbox" id="only-running"> only currently-running seeds</label>
-      &nbsp;&nbsp;
-      <label>Phase contains: <input id="phase-filter" type="text" style="background:#222a3b;color:var(--fg);border:1px solid var(--line);border-radius:3px;padding:2px 6px;width:160px"></label>
+    <div class="small filter-row">
+      <label><input type="checkbox" id="only-mppi" checked> only MPPI</label>
+      <label><input type="checkbox" id="only-running"> running only</label>
+      <span>View:
+        <label style="margin-left:4px"><input type="radio" name="curve-mode" id="mode-seeds" value="seeds" checked> seeds</label>
+        <label style="margin-left:6px"><input type="radio" name="curve-mode" id="mode-ci" value="ci"> 95% CI</label>
+      </span>
+      <label>Phase: <input id="phase-filter" list="phase-list" type="text"
+        style="background:#222a3b;color:var(--fg);border:1px solid var(--line);border-radius:3px;padding:2px 6px;width:200px"
+        placeholder="type to filter…"></label>
+      <datalist id="phase-list"></datalist>
       <button onclick="loadCurves()">apply</button>
+      <button class="refresh-btn" id="phases-btn" onclick="togglePhaseBrowser()">📊 phases</button>
     </div>
+    <div id="phase-info" style="display:none;margin-bottom:6px"></div>
+    <div id="phase-browser" style="display:none;margin-bottom:8px"></div>
     <div id="curves"></div>
   </section>
 
@@ -715,12 +1537,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <div class="small" style="margin-bottom:8px">
       Length:
       <select id="render-length">
-        <option value="2|200">short (2 × 200 steps)</option>
-        <option value="1|500">medium (1 × 500 steps)</option>
-        <option value="1|1000" selected>long (1 × 1000 steps)</option>
-        <option value="3|1000">extra long (3 × 1000 steps)</option>
+        <option value="1|250" selected>default (1 × 250 steps)</option>
+        <option value="1|500">long (1 × 500 steps)</option>
       </select>
-      <span class="small">camera: cam0 · 320×240</span>
+      <span class="small">camera: cam0 · 320×240 · queued via task queue (priority 1)</span>
     </div>
     <div id="ckpts" class="video-row"></div>
     <div id="jobs" style="margin-top:14px"></div>
@@ -753,6 +1573,11 @@ function loadBoxes(){
       const memPct = b.mem_total ? (b.mem_used/b.mem_total*100) : null;
       const hotG = gpuUtil!=null && gpuUtil>=90;
       const hotM = memPct!=null && memPct>=80;
+      // Find matching running queue task for this box.
+      const queueTask = LAST_QUEUE_TASKS.find(t => t.status === 'running' && t.box === b.tag);
+      const queueEtaHtml = queueTask && queueTask.eta_iso
+        ? `<div class="small" style="color:#64b5f6;margin-top:2px">⏱ ${fmtDur(queueTask.elapsed_s)} · done ${fmtEta(queueTask.eta_iso, false)} <span style="opacity:.5">${queueTask.label}</span></div>`
+        : '';
       const procHTML = (b.procs||[]).map(p=>{
         const tag = (p.tag||'').split('+').filter(Boolean).map(t=>`<span class="chip ${t}">${t}</span>`).join('');
         const phaseStr = p.phase ? `<b>${p.phase}</b>` : '<span class="small">(no csv yet)</span>';
@@ -772,7 +1597,7 @@ function loadBoxes(){
         <td>${memPct==null?'—':`<span class="util-bar ${hotM?'hot':''}"><span style="width:${memPct}%"></span></span>${b.mem_used}/${b.mem_total} MiB`}</td>
         <td>${b.cpu_util==null?'—':b.cpu_util+'%'}</td>
         <td class="mono">${sps==null?'<span class="small">—</span>':sps+'/s'}</td>
-        <td>${procHTML}</td>
+        <td>${procHTML}${queueEtaHtml}</td>
       `;
       tbody.appendChild(tr);
     });
@@ -781,8 +1606,201 @@ function loadBoxes(){
   });
 }
 
+// ── Phase browser + CI mode ────────────────────────────────────────────
+let PHASE_DATA = [];
+// Stable color palette — indexed by canonical phase name so same phase always same color.
+const PHASE_COLORS = ['#4ec9b0','#e0a44c','#7dd87b','#e15c5c','#9b7de8','#64b5f6','#f48fb1','#a5d6a7','#ffcc80','#80deea'];
+const _phaseColorCache = {};
+function phaseColor(name) {
+  if (!_phaseColorCache[name]) {
+    const keys = Object.keys(_phaseColorCache);
+    _phaseColorCache[name] = PHASE_COLORS[keys.length % PHASE_COLORS.length];
+  }
+  return _phaseColorCache[name];
+}
+// seed colors for per-seed view — also use canonical phase color family but vary opacity
+function seedColor(phase, seed) {
+  const col = phaseColor(phase);
+  return col; // same hue; CI band uses 16% opacity fill already
+}
+
+// Multi-phase selection for CI comparison
+const SELECTED_CI_PHASES = new Set();
+
+function togglePhaseBrowser() {
+  const panel = document.getElementById('phase-browser');
+  const btn = document.getElementById('phases-btn');
+  const open = panel.style.display !== 'none';
+  panel.style.display = open ? 'none' : '';
+  btn.textContent = open ? '📊 phases' : '📊 phases ▲';
+  if (!open) loadPhases();
+}
+
+function loadPhases() {
+  fetch('/api/phases').then(r=>r.json()).then(j=>{
+    PHASE_DATA = j.phases;
+    // Preload color cache so colors stay stable across sorts
+    PHASE_DATA.forEach(p => phaseColor(p.phase));
+    const dl = document.getElementById('phase-list');
+    if (dl) { dl.innerHTML = ''; PHASE_DATA.forEach(p=>{ const o=document.createElement('option'); o.value=p.phase; dl.appendChild(o); }); }
+    renderPhaseBrowser(PHASE_DATA, 'mean_best', false);
+    updatePhaseInfo(document.getElementById('phase-filter')?.value.trim() || '');
+  });
+}
+
+let _pbSortKey = 'mean_best', _pbSortAsc = false;
+function renderPhaseBrowser(phases, sortKey, sortAsc) {
+  _pbSortKey = sortKey; _pbSortAsc = sortAsc;
+  const panel = document.getElementById('phase-browser');
+  if (!panel || panel.style.display === 'none') return;
+  const ciMode = document.getElementById('mode-ci')?.checked;
+  const sorted = [...phases].sort((a,b)=>{
+    const av = (sortKey==='phase') ? a.phase : (a[sortKey]??-999);
+    const bv = (sortKey==='phase') ? b.phase : (b[sortKey]??-999);
+    if (typeof av==='string') return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    return sortAsc ? av-bv : bv-av;
+  });
+  function th(col,label){ const arr=col===_pbSortKey?(_pbSortAsc?'↑':'↓'):''; return `<th class="sortable-th" onclick="renderPhaseBrowser(PHASE_DATA,'${col}',${col===_pbSortKey?!sortAsc:false})">${label}${arr?` ${arr}`:''}</th>`; }
+  const cbHeader = ciMode ? '<th title="Select for multi-phase CI">&#x2713;</th>' : '';
+  const rows = sorted.map(p=>{
+    const col = phaseColor(p.phase);
+    const dot = `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${col};margin-right:5px;vertical-align:middle"></span>`;
+    const mean = p.mean_best!=null ? p.mean_best.toFixed(1) : '—';
+    const std  = p.std_best!=null  ? `±${p.std_best.toFixed(1)}` : '';
+    const max  = p.max_best!=null  ? p.max_best.toFixed(1) : '—';
+    const mCls = (p.mean_best??0)>=500?'box-good':((p.mean_best??0)>=300?'box-warn':'');
+    const g1Cls= p.n_g1>0?'box-good':'';
+    const varTip = p.variants&&p.variants.length ? ` title="Merged from: ${p.variants.join(', ')}"` : '';
+    const varBadge = p.variants&&p.variants.length ? `<span class="small" style="color:var(--muted)" title="${p.variants.join(', ')}"> +${p.variants.length}</span>` : '';
+    const cbCell = ciMode ? `<td><input type="checkbox" class="phase-cb" data-phase="${p.phase}" ${SELECTED_CI_PHASES.has(p.phase)?'checked':''}
+        onclick="toggleCiPhase('${p.phase}',this.checked)"></td>` : '';
+    const notes = p.notes||'';
+    return `<tr${varTip}>
+      ${cbCell}
+      <td class="mono" style="cursor:pointer" onclick="setPhaseFilter('${p.phase}')">${dot}${p.phase}${varBadge}</td>
+      <td>${p.n_with_data}/${p.n_seeds}</td>
+      <td class="mono ${mCls}">${mean} <span style="color:var(--muted)">${std}</span></td>
+      <td class="mono">${max}</td>
+      <td class="${g1Cls}">${p.n_g1}/${p.n_with_data}</td>
+      <td class="small" style="max-width:280px;white-space:normal">${notes}</td></tr>`;
+  }).join('');
+  const compareBtn = ciMode ? `<div style="padding:6px 0">
+    <button onclick="compareSelected()" id="compare-btn"
+      ${SELECTED_CI_PHASES.size===0?'disabled':''}>
+      Compare ${SELECTED_CI_PHASES.size} selected in CI</button>
+    <button class="refresh-btn" onclick="clearCiSelection()" style="margin-left:6px">clear</button>
+  </div>` : '';
+  panel.innerHTML = `<div class="phase-browser">
+    ${compareBtn}
+    <table style="width:100%;font-size:12px"><thead><tr>
+      ${cbHeader}${th('phase','Phase')}${th('n_with_data','Seeds')}
+      ${th('mean_best','Mean')}${th('max_best','Max')}${th('n_g1','G1')}
+      <th>Notes</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+  </div>`;
+}
+
+function toggleCiPhase(phase, checked) {
+  if (checked) SELECTED_CI_PHASES.add(phase);
+  else SELECTED_CI_PHASES.delete(phase);
+  const btn = document.getElementById('compare-btn');
+  if (btn) { btn.disabled = SELECTED_CI_PHASES.size === 0; btn.textContent = `Compare ${SELECTED_CI_PHASES.size} selected in CI`; }
+}
+
+function compareSelected() {
+  if (!SELECTED_CI_PHASES.size) return;
+  const pf = document.getElementById('phase-filter');
+  if (pf) pf.value = [...SELECTED_CI_PHASES].join(',');
+  document.getElementById('mode-ci').checked = true;
+  loadCurves();
+}
+
+function clearCiSelection() {
+  SELECTED_CI_PHASES.clear();
+  renderPhaseBrowser(PHASE_DATA, _pbSortKey, _pbSortAsc);
+}
+
+function setPhaseFilter(phase) {
+  const pf = document.getElementById('phase-filter'); if (pf) pf.value = phase;
+  loadCurves();
+}
+
+function updatePhaseInfo(filterText) {
+  const panel = document.getElementById('phase-info');
+  if (!panel) return;
+  if (!filterText || !PHASE_DATA.length) { panel.style.display='none'; return; }
+  // support comma-separated tokens — match any
+  const tokens = filterText.split(',').map(t=>t.trim()).filter(Boolean);
+  const matching = PHASE_DATA.filter(p=> tokens.some(t=>p.phase.includes(t)));
+  if (!matching.length) { panel.style.display='none'; return; }
+  panel.style.display = '';
+  panel.innerHTML = `<div class="phase-info-bar small">${matching.map(p=>{
+    const col = phaseColor(p.phase);
+    const dot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${col};margin-right:4px;vertical-align:middle"></span>`;
+    const mean = p.mean_best!=null ? p.mean_best.toFixed(1) : '—';
+    const std  = p.std_best!=null  ? `±${p.std_best.toFixed(1)}` : '';
+    const max  = p.max_best!=null  ? p.max_best.toFixed(1) : '—';
+    const mCls = (p.mean_best??0)>=500?'box-good':((p.mean_best??0)>=300?'box-warn':'');
+    const varStr = p.variants&&p.variants.length ? ` <span style="color:var(--muted)" title="${p.variants.join(', ')}">(+${p.variants.length} device variants merged)</span>` : '';
+    return `<span>${dot}<b class="mono">${p.phase}</b>${varStr} · ${p.n_with_data} seeds · `+
+           `<span class="${mCls}">${mean}${std}</span> · max ${max} · G1 ${p.n_g1}/${p.n_with_data}`+
+           `${p.notes?` <span style="color:var(--muted)">· ${p.notes}</span>`:''}</span>`;
+  }).join('<span style="color:var(--line);margin:0 4px">│</span>')}</div>`;
+}
+
+function loadPhaseCI(phaseFilter) {
+  const url = '/api/phase_ci' + (phaseFilter ? '?phase='+encodeURIComponent(phaseFilter) : '');
+  fetch(url).then(r=>r.json()).then(j=>{
+    const traces = [];
+    j.ci_curves.forEach(ci=>{
+      // Same canonical phase always gets same color (stable across filter changes)
+      const col = phaseColor(ci.phase);
+      const steps = ci.rows.map(r=>r.step);
+      const upper = ci.rows.map(r=>r.upper);
+      const lower = ci.rows.map(r=>r.lower);
+      const mean  = ci.rows.map(r=>r.mean);
+      const label = `${ci.phase} (n=${ci.n_seeds})${ci.notes?' · '+ci.notes:''}`;
+      // CI shaded band: lower anchor → upper filled with same color at ~18% opacity
+      traces.push({x:steps, y:lower, type:'scatter', mode:'lines', showlegend:false,
+                   line:{color:'transparent'}, hoverinfo:'skip', legendgroup:ci.phase});
+      traces.push({x:steps, y:upper, type:'scatter', mode:'lines', fill:'tonexty',
+                   fillcolor:col+'2e', line:{color:'transparent'}, showlegend:false,
+                   hoverinfo:'skip', legendgroup:ci.phase});
+      // Mean line — same color, full opacity
+      traces.push({x:steps, y:mean, type:'scatter', mode:'lines', name:label,
+                   line:{color:col, width:2.5}, legendgroup:ci.phase,
+                   hovertemplate:`<b>${ci.phase}</b><br>step %{x:,d}<br>mean %{y:.1f}<extra></extra>`});
+    });
+    $('#curves-count').textContent = `(${j.ci_curves.length} phase${j.ci_curves.length===1?'':'s'}, 95% CI bands)`;
+    Plotly.react('curves', traces, {
+      paper_bgcolor:'#161922', plot_bgcolor:'#161922',
+      font:{color:'#dbe1eb', size:11},
+      xaxis:{title:'env step', gridcolor:'#2a2f3b'},
+      yaxis:{title:'mean MPPI ± 95% CI', gridcolor:'#2a2f3b'},
+      shapes:[
+        {type:'line',x0:0,x1:1,xref:'paper',y0:500,y1:500,line:{color:'#7dd87b',dash:'dot',width:1}},
+        {type:'line',x0:0,x1:1,xref:'paper',y0:600,y1:600,line:{color:'#4ec9b0',dash:'dot',width:1}},
+      ],
+      margin:{l:50,r:20,t:20,b:40}, legend:{font:{size:10},x:1.02,y:1}, showlegend:true,
+    }, {displaylogo:false, responsive:true});
+  });
+}
+
+// ── Per-seed curve view ────────────────────────────────────────────────
 function loadCurves(){
   const phaseFilter = $('#phase-filter').value.trim();
+  const ciMode = document.getElementById('mode-ci')?.checked;
+
+  // Update phase info panel (lazy-load phase data if needed)
+  if (PHASE_DATA.length) updatePhaseInfo(phaseFilter);
+  else fetch('/api/phases').then(r=>r.json()).then(j=>{ PHASE_DATA=j.phases; updatePhaseInfo(phaseFilter);
+    const dl=document.getElementById('phase-list'); if(dl){ dl.innerHTML=''; PHASE_DATA.forEach(p=>{const o=document.createElement('option');o.value=p.phase;dl.appendChild(o);}); }
+  });
+
+  // Refresh browser table so checkboxes appear/disappear with mode switch
+  if (PHASE_DATA.length) renderPhaseBrowser(PHASE_DATA, _pbSortKey, _pbSortAsc);
+  if (ciMode) { loadPhaseCI(phaseFilter); return; }
+
   const url = '/api/curves' + (phaseFilter ? '?phase='+encodeURIComponent(phaseFilter) : '');
   fetch(url).then(r=>r.json()).then(j=>{
     const onlyMppi = $('#only-mppi').checked;
@@ -799,13 +1817,15 @@ function loadCurves(){
       if (!pts.length) return;
       const best = Math.max(...pts.map(p=>p.reward));
       const isRunning = ACTIVE_KEYS.has(`${c.phase}|${c.seed}`);
-      const color = best>=500 ? '#7dd87b' : (best>=300 ? '#e0a44c' : '#7e8ba0');
+      // Use stable phase color (same hue as CI view); dim if not winner
+      const baseCol = phaseColor(c.phase);
+      const color = best>=500 ? baseCol : (best>=300 ? baseCol+'bb' : baseCol+'66');
       traces.push({
         x: pts.map(p=>p.step), y: pts.map(p=>p.reward),
         type:'scattergl', mode:'lines',
         name: `${c.phase} s${c.seed} (${best.toFixed(0)})${isRunning ? ' ●' : ''}`,
-        line:{width: isRunning ? 2 : 1.2, color, dash: isRunning ? 'solid' : 'solid'},
-        hovertemplate: `${c.phase} s${c.seed}${isRunning?' (running)':''}<br>step %{x:,d} → %{y:.1f}<extra></extra>`,
+        line:{width: isRunning ? 2.2 : 1.2, color},
+        hovertemplate: `<b>${c.phase}</b> s${c.seed}${isRunning?' (running)':''}<br>step %{x:,d} → %{y:.1f}<extra></extra>`,
       });
     });
     Plotly.react('curves', traces, {
@@ -826,6 +1846,7 @@ function loadCurves(){
 // Track which (phase, seed) keys currently have an in-flight render job so we
 // don't reset their button to "Render rollout" on the next loadCheckpoints().
 const ACTIVE_RENDER_KEYS = new Set();
+const LAST_RENDER_FAILURES = new Map();
 function renderKey(phase, seed){ return `${phase}|${seed}`; }
 
 function loadCheckpoints(){
@@ -841,7 +1862,9 @@ function loadCheckpoints(){
       const badgeText = v==null ? '— MPPI' : `MPPI ${v.toFixed(1)}`;
       const key = renderKey(c.phase, c.seed);
       const busy = ACTIVE_RENDER_KEYS.has(key);
-      const btnLabel = busy ? 'rendering…' : (c.videos && c.videos.length ? 'Re-render' : 'Render rollout');
+      const failed = LAST_RENDER_FAILURES.get(key);
+      const btnLabel = busy ? 'rendering…' : (failed ? 'Render failed · retry' : (c.videos && c.videos.length ? 'Re-render' : 'Render rollout'));
+      const failHTML = failed ? `<div class="box-bad small mono" style="margin-top:6px;max-height:58px;overflow:auto">${failed}</div>` : '';
       const videosHTML = (c.videos||[]).map(v => `
         <div style="margin-top:6px">
           <div class="small" style="opacity:.7">${v.source==='archive'?'archived':'rendered'} · ${v.label}</div>
@@ -854,6 +1877,7 @@ function loadCheckpoints(){
         </div>
         <div class="small">last ${c.last_mppi==null?'—':c.last_mppi.toFixed(1)} · ${c.size_mb} MB · ${new Date(c.mtime*1000).toLocaleString()}</div>
         <button data-phase="${c.phase}" data-seed="${c.seed}" ${busy?'disabled':''}>${btnLabel}</button>
+        ${failHTML}
         ${videosHTML}
       `;
       root.appendChild(card);
@@ -888,11 +1912,21 @@ function loadJobs(){
         const stEl = document.getElementById('st-'+job.job_id);
         const pgEl = document.getElementById('pg-'+job.job_id);
         const vidEl = document.getElementById('vid-'+job.job_id);
+        const logEl = document.getElementById('log-'+job.job_id);
+        const hostEl = document.getElementById('host-'+job.job_id);
         if (stEl){ stEl.textContent = job.status;
                    stEl.className = 'pill ' + (job.status==='done'?'green':'gray'); }
         if (pgEl) pgEl.value = 100;
+        if (hostEl && job.render_host) hostEl.textContent = `on ${job.render_host}`;
+        if (logEl && job.log_tail) logEl.textContent = job.log_tail.join('\n');
         if (vidEl && job.video && !vidEl.innerHTML)
           vidEl.innerHTML = `<video src="${job.video}" controls preload="metadata" style="width:100%;margin-top:6px;border-radius:4px"></video>`;
+        if (job.status==='failed')
+          LAST_RENDER_FAILURES.set(renderKey(job.phase, job.seed), `${job.error_type || 'failed'}\n${(job.log_tail||[]).join('\n')}`);
+        if (job.status==='done')
+          LAST_RENDER_FAILURES.delete(renderKey(job.phase, job.seed));
+        if (vidEl && job.status==='failed' && !vidEl.innerHTML)
+          vidEl.innerHTML = `<span class="box-bad small">render failed — see log above</span>`;
       }
     });
     // Drop any orphan job cards whose jobs the server forgot.
@@ -904,22 +1938,22 @@ function loadJobs(){
 }
 
 function startRender(phase, seed, btn){
-  btn.disabled = true; btn.textContent = 'queued…';
-  ACTIVE_RENDER_KEYS.add(renderKey(phase, seed));
+  btn.disabled = true; btn.textContent = 'queuing…';
   const lenSel = document.getElementById('render-length');
-  const [nEps, epLen] = (lenSel ? lenSel.value : '1|1000').split('|').map(Number);
-  fetch('/api/render', {method:'POST', headers:{'Content-Type':'application/json'},
+  const [nEps, epLen] = (lenSel ? lenSel.value : '1|250').split('|').map(Number);
+  fetch('/api/queue/render', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({phase, seed, env_id:'HopperHop', camera:'cam0',
                           n_episodes:nEps, episode_length:epLen})
   }).then(r=>r.json()).then(j=>{
     if (j.error) {
-      ACTIVE_RENDER_KEYS.delete(renderKey(phase, seed));
       btn.textContent='Render rollout'; btn.disabled=false;
       alert(j.error); return;
     }
-    if (!document.getElementById('job-'+j.job_id)) addJobCard(j.job_id, phase, seed);
-    pollJob(j.job_id, btn);
-  });
+    btn.textContent = 'queued (task ' + j.id + ')';
+    loadQueue();
+    // Also start polling jobs so progress shows up if render starts immediately
+    loadJobs();
+  }).catch(()=>{ btn.textContent='Render rollout'; btn.disabled=false; });
 }
 
 function addJobCard(jobId, phase, seed){
@@ -927,7 +1961,7 @@ function addJobCard(jobId, phase, seed){
   const card = document.createElement('div'); card.id = 'job-'+jobId;
   card.className = 'video-card'; card.style.marginBottom='8px';
   card.innerHTML = `
-    <div><b>${phase}</b> s${seed} <span class="pill gray" id="st-${jobId}">queued</span></div>
+    <div><b>${phase}</b> s${seed} <span class="pill gray" id="st-${jobId}">queued</span> <span class="small" id="host-${jobId}"></span></div>
     <progress id="pg-${jobId}" max="100" value="0"></progress>
     <div class="small mono" id="log-${jobId}" style="margin-top:4px;max-height:60px;overflow:auto"></div>
     <div id="vid-${jobId}"></div>
@@ -941,46 +1975,196 @@ function pollJob(jobId, btn){
     const pgEl = document.getElementById('pg-'+jobId);
     const logEl = document.getElementById('log-'+jobId);
     const vidEl = document.getElementById('vid-'+jobId);
+    const hostEl = document.getElementById('host-'+jobId);
     if (!stEl) return;  // card was removed
     pgEl.value = (j.progress||0)*100;
     stEl.textContent = j.status;
     stEl.className = 'pill ' + (j.status==='done' ? 'green' : 'gray');
-    logEl.textContent = (j.log||[]).slice(-3).join('\n');
+    if (hostEl && j.render_host) hostEl.textContent = `on ${j.render_host}`;
+    logEl.textContent = (j.log||[]).slice(-8).join('\n');
     const key = renderKey(j.phase, j.seed);
     if (j.status==='done' && j.video){
       if (!vidEl.innerHTML)
         vidEl.innerHTML = `<video src="${j.video}" controls preload="metadata" style="width:100%;margin-top:6px;border-radius:4px"></video>`;
       ACTIVE_RENDER_KEYS.delete(key);
+      LAST_RENDER_FAILURES.delete(key);
       if (btn) { btn.disabled=false; btn.textContent='Re-render'; }
       // refresh checkpoint cards so the new video shows there too
       loadCheckpoints();
       return;
     }
     if (j.status==='failed'){
-      vidEl.innerHTML = `<span class="box-bad small">render failed — see log</span>`;
+      LAST_RENDER_FAILURES.set(key, `${j.error_type || 'failed'}\n${(j.log||[]).slice(-8).join('\n')}`);
+      vidEl.innerHTML = `<span class="box-bad small">render failed — see log above</span>`;
       ACTIVE_RENDER_KEYS.delete(key);
-      if (btn) { btn.disabled=false; btn.textContent='Render rollout'; }
+      if (btn) { btn.disabled=false; btn.textContent='Render failed · retry'; }
+      loadCheckpoints();
       return;
     }
     setTimeout(()=>pollJob(jobId, btn), 1500);
   });
 }
 
+// ── Task queue UI ─────────────────────────────────────────────────────────
+const STATUS_STYLE = {
+  pending: 'color:#64b5f6',
+  running: 'color:#7dd87b;font-weight:600',
+  done:    'color:#7e8ba0',
+  failed:  'color:#e15c5c',
+};
+
+let LAST_QUEUE_TASKS = [];
+
+function fmtDur(s) {
+  if (s == null) return '—';
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function fmtEta(isoStr, short) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr), now = new Date();
+  const diffMs = d - now;
+  const timeStr = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  const isToday = d.toDateString() === now.toDateString();
+  const label = isToday ? timeStr : 'tmrw ' + timeStr;
+  if (diffMs < 0) return `<span style="opacity:.5">overdue</span>`;
+  const h = Math.floor(diffMs / 3600000), m = Math.floor((diffMs % 3600000) / 60000);
+  const rel = h > 0 ? `${h}h ${m}m` : `${m}m`;
+  return short ? `~${rel}` : `~${rel} · ${label}`;
+}
+
+function loadQueue(){
+  fetch('/api/queue').then(r=>r.json()).then(j=>{
+    LAST_QUEUE_TASKS = j.tasks || [];
+    // Update queue-level ETA in section header
+    const hdr = document.getElementById('queue-eta-hdr');
+    if (hdr) {
+      const running = LAST_QUEUE_TASKS.filter(t=>t.status==='running').length;
+      const pending = LAST_QUEUE_TASKS.filter(t=>t.status==='pending').length;
+      if (j.queue_eta && (running || pending)) {
+        const etaStr = fmtEta(j.queue_eta, false);
+        hdr.innerHTML = `all done in ${etaStr}`;
+      } else {
+        hdr.textContent = '';
+      }
+    }
+    const tbody = document.querySelector('#queue-table tbody');
+    const empty = document.getElementById('queue-empty');
+    tbody.innerHTML = '';
+    if (!j.tasks.length){ empty.style.display=''; return; }
+    empty.style.display='none';
+    j.tasks.forEach(t=>{
+      const style = STATUS_STYLE[t.status] || '';
+      const isPending = t.status === 'pending';
+      const canRetry = t.status === 'running' || t.status === 'failed' || t.status === 'done';
+      const deleteBtn = `<button title="force delete" onclick="deleteTask('${t.id}')" style="padding:2px 6px;color:var(--bad)">✕</button>`;
+      let actions = '';
+      if (isPending) {
+        actions = `
+          <button title="increase priority" onclick="movePriority('${t.id}',-1)" style="padding:2px 6px">↑</button>
+          <button title="decrease priority" onclick="movePriority('${t.id}',1)"  style="padding:2px 6px">↓</button>
+          ${deleteBtn}
+        `;
+      } else if (canRetry) {
+        actions = `<button title="re-queue this task" onclick="retryTask('${t.id}')" style="padding:2px 8px;color:var(--accent)">↺ retry</button> ${deleteBtn}`;
+      }
+      const envDisplay = t.env && !t.type ? `<div class="small mono" style="opacity:.6;margin-top:1px">${t.env}</div>` : '';
+      const typeTag = t.type === 'render' ? '<span class="chip" style="background:#1c4254;color:#4ec9b0;margin-left:4px">render</span>' : '';
+      const boxStr = t.box ? `<span class="mono" style="font-size:11px">${t.box}</span>` : '<span class="small">—</span>';
+      // ETA column
+      let etaCell = '<span class="small" style="opacity:.4">—</span>';
+      if (t.status === 'running' && t.eta_iso) {
+        const bar = t.estimated_duration_s > 0
+          ? Math.min(100, Math.round(t.elapsed_s / t.estimated_duration_s * 100)) : 0;
+        etaCell = `<div style="font-size:11px;line-height:1.4">
+          <div style="color:#7dd87b">⏱ ${fmtDur(t.elapsed_s)} elapsed</div>
+          <div style="color:#64b5f6">→ ${fmtEta(t.eta_iso, false)}</div>
+          <div style="background:#1a2234;border-radius:2px;height:3px;margin-top:3px;width:100%">
+            <div style="background:#7dd87b;height:3px;border-radius:2px;width:${bar}%"></div></div>
+        </div>`;
+      } else if (t.status === 'pending' && t.eta_iso) {
+        etaCell = `<div style="font-size:11px;line-height:1.4;color:var(--muted)">
+          <div>starts ${fmtEta(t.estimated_start_iso, true)}</div>
+          <div>done ${fmtEta(t.eta_iso, false)}</div>
+        </div>`;
+      } else if (t.status === 'done' && t.started_at && t.ended_at) {
+        const s = new Date(t.started_at), e = new Date(t.ended_at);
+        etaCell = `<span class="small" style="opacity:.5">${fmtDur((e-s)/1000)}</span>`;
+      }
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="mono" style="text-align:center">${t.priority}</td>
+        <td><span title="${t.launcher}&#10;${t.env||''}">${t.label}</span>${typeTag}${envDisplay}</td>
+        <td><span style="${style}">${t.status}</span></td>
+        <td>${boxStr}</td>
+        <td>${etaCell}</td>
+        <td style="white-space:nowrap">${actions}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  });
+}
+function toggleAddTask(){
+  const f = document.getElementById('add-task-form');
+  f.style.display = f.style.display === 'none' ? '' : 'none';
+}
+function addTask(){
+  const label = document.getElementById('at-label').value.trim();
+  const launcher = document.getElementById('at-launcher').value.trim();
+  const env = document.getElementById('at-env').value.trim();
+  const priority = parseInt(document.getElementById('at-priority').value) || 10;
+  const errEl = document.getElementById('at-error');
+  errEl.style.display = 'none';
+  if (!label || !launcher){ errEl.textContent='Label and launcher are required'; errEl.style.display=''; return; }
+  fetch('/api/queue', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({label, launcher, env, priority})
+  }).then(r=>r.json()).then(j=>{
+    if (j.error){ errEl.textContent=j.error; errEl.style.display=''; return; }
+    document.getElementById('at-label').value = '';
+    document.getElementById('at-env').value = '';
+    loadQueue();
+  });
+}
+function deleteTask(id){
+  fetch('/api/queue/'+id, {method:'DELETE'}).then(()=>loadQueue());
+}
+function movePriority(id, delta){
+  fetch('/api/queue/'+id+'/priority', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({delta})
+  }).then(()=>loadQueue());
+}
+function retryTask(id){
+  fetch('/api/queue/'+id+'/retry', {method:'POST'}).then(()=>loadQueue());
+}
+
 // initial + periodic refresh
-loadBoxes(); loadCurves(); loadJobs(); loadCheckpoints();
+loadBoxes(); loadCurves(); loadJobs(); loadCheckpoints(); loadQueue();
+// Preload phase data for autocomplete + info bar
+fetch('/api/phases').then(r=>r.json()).then(j=>{
+  PHASE_DATA=j.phases;
+  const dl=document.getElementById('phase-list');
+  if(dl){ dl.innerHTML=''; PHASE_DATA.forEach(p=>{const o=document.createElement('option');o.value=p.phase;dl.appendChild(o);}); }
+});
 setInterval(loadBoxes, 30000);
 setInterval(loadCurves, 60000);
-setInterval(loadJobs, 4000);          // job state — fast enough that the active set
-                                       // stays accurate during a 30-90 s render
+setInterval(loadJobs, 4000);
 setInterval(loadCheckpoints, 90000);
+setInterval(loadQueue, 10000);
 
-// Wire up checkbox/text filter inputs so they re-render immediately.
+// Wire up filter inputs
 ['only-mppi','only-running'].forEach(id=>{
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', loadCurves);
 });
+document.querySelectorAll('input[name="curve-mode"]').forEach(el=>{
+  el.addEventListener('change', loadCurves);
+});
 const pf = document.getElementById('phase-filter');
-if (pf) pf.addEventListener('keydown', e=>{ if (e.key==='Enter') loadCurves(); });
+if (pf) {
+  pf.addEventListener('keydown', e=>{ if (e.key==='Enter') loadCurves(); });
+  pf.addEventListener('input', ()=>{ const v=pf.value.trim(); if(PHASE_DATA.length) updatePhaseInfo(v); });
+}
 </script>
 </body></html>
 """

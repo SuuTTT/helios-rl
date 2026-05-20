@@ -4,3 +4,4 @@
 # DONE 20:06:18Z 17637|78.83.187.54|scripts/run_phaseq_knee_5seed.sh|SEEDS=9 CUDA_VISIBLE_DEVICES=1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 (launcher not synced on remote, requeued after rsync)
 # 2026-05-19: dropping duplicate s9 line (s9 is already running via direct launch); queue r1 s3 for after s9 finishes
 # DONE 03:18:45Z 17637|78.83.187.54|scripts/run_phaser1_soft.sh|SEEDS=3 CUDA_VISIBLE_DEVICES=1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.35
+# DIRECT 2026-05-19T17:58Z Phase-aa codex K_UPDATE=64 seeds 1-3 launched on GPU1.

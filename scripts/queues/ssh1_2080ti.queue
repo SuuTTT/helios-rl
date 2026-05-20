@@ -3,3 +3,5 @@
 # DONE 17:08:04Z 34217|ssh1.vast.ai|scripts/run_phaseq_knee_5seed.sh|SEEDS=6 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75
 # 2026-05-19: r2 s2 next
 # DONE 02:19:28Z 34217|ssh1.vast.ai|scripts/run_phaser2_gait.sh|SEEDS=2 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75
+# 2026-05-20: phase1b_10m baseline rerun — Glass default knobs, 10M cap, 3M patience
+34217|ssh1.vast.ai|scripts/run_phase1b_10m.sh|SEEDS="1 2 3" XLA_PYTHON_CLIENT_MEM_FRACTION=0.75

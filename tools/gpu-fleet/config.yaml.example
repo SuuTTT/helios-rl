@@ -1,0 +1,84 @@
+# gpu-fleet configuration — copy to config.yaml and edit
+# Env var FLEET_CONFIG overrides this path at runtime.
+
+fleet:
+  name: "my-research-fleet"
+  # Absolute path to repo root.  Must be identical on all remote boxes
+  # (use the same path when you clone the repo on each machine).
+  repo: /root/my-repo
+
+ssh:
+  # Private key used to authenticate to all remote boxes.
+  # The corresponding public key must be in root@<host>:~/.ssh/authorized_keys.
+  # Override at runtime via SSH_IDENTITY_FILE env var.
+  key: /home/coder/.ssh/id_ed25519
+  user: root                    # remote username (same on every box)
+  connect_timeout: 10           # seconds before SSH gives up
+  batch_mode: true              # disable interactive prompts
+
+queue:
+  file: tools/gpu-fleet/queue.json   # relative to fleet.repo
+  poll_seconds: 60                    # how often daemon checks for idle boxes
+
+dashboard:
+  port: 5055
+  # Directory (relative to fleet.repo) scanned recursively for metric CSVs.
+  # Expected layout:  exp_dir/<experiment_tag>/<anything>.csv
+  # Each CSV must have a column named step_col (default "step").
+  exp_dir: exp
+  step_col: step                # x-axis column name
+  log_dir: tools/gpu-fleet/logs # daemon / dashboard log directory
+
+# Process name to match when checking if a box is busy.
+# Daemon greps for this string in remote ps output.
+proc_pattern: "run_benchmark"
+
+# Default XLA memory fraction injected if not set per-box or in task env.
+xla_mem_default: "0.65"
+
+# ── Box registry ─────────────────────────────────────────────────────────────
+# Each entry describes one GPU slot.  Two entries with the same host:port but
+# different gpu_idx model a dual-GPU machine.
+boxes:
+  # Local machine — no SSH, process spawned directly.
+  - tag: local
+    host: null
+    port: null
+    gpu_idx: 0
+    label: "Local GPU (12 GB)"
+    xla_mem: "0.85"
+
+  # Single-GPU remote box.
+  - tag: remote1
+    host: ssh6.vast.ai
+    port: 11115
+    gpu_idx: 0
+    label: "Remote 1 — 4060 8 GB"
+    xla_mem: "0.65"
+
+  # Another remote box on a different port of the same hostname.
+  - tag: remote2
+    host: ssh6.vast.ai
+    port: 16779
+    gpu_idx: 0
+    label: "Remote 2 — 3080 10 GB"
+    xla_mem: "0.65"
+
+  # Dual-GPU box: two entries share host+port, differ in gpu_idx.
+  # idle_check: nvidia-smi  — detects per-GPU utilisation (≤100 MiB = idle)
+  # instead of the default process-count method.
+  - tag: dualbox_gpu0
+    host: 78.83.187.54
+    port: 17637
+    gpu_idx: 0
+    label: "Dual-GPU host GPU0 — 3060 6 GB"
+    xla_mem: "0.35"
+    idle_check: nvidia-smi
+
+  - tag: dualbox_gpu1
+    host: 78.83.187.54
+    port: 17637
+    gpu_idx: 1
+    label: "Dual-GPU host GPU1 — 3060 6 GB"
+    xla_mem: "0.35"
+    idle_check: nvidia-smi

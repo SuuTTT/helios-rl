@@ -91,6 +91,8 @@ def main():
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--n_episodes", type=int, default=3)
     ap.add_argument("--episode_length", type=int, default=1000)
+    ap.add_argument("--stop_on_done", action="store_true",
+                    help="end an episode when the environment reports done; default renders the full episode_length")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--height", type=int, default=240)
     ap.add_argument("--width", type=int, default=320)
@@ -124,22 +126,28 @@ def main():
     for ep in range(args.n_episodes):
         key, rk = jax.random.split(key)
         state = env.reset(rk)
-        traj = [state]
+        traj = [jax.device_get(state)]
         labels = [0]
         cum = 0.0
         rets = [0.0]
-        for t in range(args.episode_length):
+        # episode_length is the requested number of rendered env frames. `traj`
+        # already contains the reset frame, so step at most length-1 times.
+        for t in range(max(args.episode_length - 1, 0)):
             obs = jnp.asarray(state.obs)
             z = enc_apply(params, obs)
             lab = _cluster_label(z, params["glass"], T_proto=T_proto)
             act = pi_apply(params, z)
             state = env.step(state, act)
-            traj.append(state)
+            # Keep the saved render trajectory on host memory. Holding hundreds
+            # of MJX states as GPU buffers can exhaust CUDA memory before render.
+            traj.append(jax.device_get(state))
             labels.append(lab)
             cum += float(state.reward)
             rets.append(cum)
-            if bool(state.done > 0.5):
+            if args.stop_on_done and bool(state.done > 0.5):
                 break
+            if (t + 1) % 50 == 0 or (t + 1) == max(args.episode_length - 1, 0):
+                print(f"  rollout {ep}: step={t + 1}/{max(args.episode_length - 1, 0)}", flush=True)
         print(f"  episode {ep}: steps={len(traj)}  return={cum:.1f}")
         all_traj.append(traj)
         all_labels.append(labels)
@@ -147,14 +155,15 @@ def main():
 
     # Render and stitch
     all_frames = []
-    for traj, labs, rets in zip(all_traj, all_labels, all_returns):
+    for idx, (traj, labs, rets) in enumerate(zip(all_traj, all_labels, all_returns)):
         cam = args.camera if args.camera else None
         frames = env.render(traj, height=args.height, width=args.width, camera=cam)
         frames = overlay_cluster_label(list(frames), labs, rets)
         all_frames.extend(frames)
-        # 8-frame black separator between episodes
-        sep = np.zeros_like(frames[0])
-        all_frames.extend([sep] * 8)
+        # 8-frame black separator between episodes, but not after the last one.
+        if idx != len(all_traj) - 1:
+            sep = np.zeros_like(frames[0])
+            all_frames.extend([sep] * 8)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     try:

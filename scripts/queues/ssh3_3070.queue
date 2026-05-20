@@ -5,3 +5,7 @@
 # DONE 00:30:59Z 15229|ssh3.vast.ai|scripts/run_phaseq_knee_5seed.sh|SEEDS=12 XLA_PYTHON_CLIENT_MEM_FRACTION=0.55
 # 2026-05-19: s12 still running; queue r1 s1 for after
 # DONE 07:46:54Z 15229|ssh3.vast.ai|scripts/run_phaser1_soft.sh|SEEDS=1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.55
+# 2026-05-19: Phase-aa moved to idle ssh17637_gpu1/ssh3_3060ti; leave ssh3_3070 free.
+# MOVED 15229|ssh3.vast.ai|scripts/run_phaseaa_codex_kupdate_sweep.sh|K_UPDATES='64 256' XLA_PYTHON_CLIENT_MEM_FRACTION=0.55
+# 2026-05-20: phase1b_10m seeds 4-5
+15229|ssh3.vast.ai|scripts/run_phase1b_10m.sh|SEEDS="4 5" XLA_PYTHON_CLIENT_MEM_FRACTION=0.55
