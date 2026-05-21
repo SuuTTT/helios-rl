@@ -12,6 +12,7 @@ Usage:
 import fcntl
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -138,18 +139,19 @@ def is_box_idle(tag: str, port: int, host: str, gpu_idx: int) -> bool:
 
 # ── Task launch ───────────────────────────────────────────────────────────────
 
-def rsync_scripts(port: int, host: str):
-    """Rsync scripts/ to remote box so launcher scripts are present."""
-    cmd = [
-        "rsync", "-az", "--delete",
-        "-e", f"ssh -p {port} -i {SSH_KEY} -o StrictHostKeyChecking=no -o ConnectTimeout=15",
-        str(REPO / "scripts") + "/",
-        f"root@{host}:/root/helios-rl/scripts/",
-    ]
-    try:
-        subprocess.run(cmd, timeout=60, capture_output=True, check=True)
-    except Exception as e:
-        log(f"rsync to {host}:{port} failed: {e}")
+def rsync_code(port: int, host: str):
+    """Rsync launcher and source code needed by queued experiment tasks."""
+    for rel in ("scripts", "src"):
+        cmd = [
+            "rsync", "-az", "--delete",
+            "-e", f"ssh -p {port} -i {SSH_KEY} -o StrictHostKeyChecking=no -o ConnectTimeout=15",
+            str(REPO / rel) + "/",
+            f"root@{host}:/root/helios-rl/{rel}/",
+        ]
+        try:
+            subprocess.run(cmd, timeout=90, capture_output=True, check=True)
+        except Exception as e:
+            log(f"rsync {rel}/ to {host}:{port} failed: {e}")
 
 
 def launch_task(task: dict, tag: str, port: int, host: str):
@@ -168,20 +170,33 @@ def launch_task(task: dict, tag: str, port: int, host: str):
 
     if tag == "local":
         log_local = f"/tmp/tqd_{task['id']}.log"
-        shell_cmd = (
-            f"cd {REPO} ; "
-            f"{env} nohup setsid bash {task['launcher']} "
-            f"> {log_local} 2>&1 < /dev/null & disown"
-        )
         try:
-            subprocess.Popen(["bash", "-c", shell_cmd],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                Path(log_local).unlink(missing_ok=True)
+            except Exception:
+                pass
+            proc_env = os.environ.copy()
+            for item in shlex.split(env):
+                if "=" in item:
+                    k, v = item.split("=", 1)
+                    proc_env[k] = v
+            fh = open(log_local, "w")
+            subprocess.Popen(
+                ["bash", task["launcher"]],
+                cwd=REPO,
+                env=proc_env,
+                stdin=subprocess.DEVNULL,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+            )
         except Exception as e:
             log(f"local launch error: {e}")
         return
 
-    # Remote: rsync scripts first, then SSH-launch.
-    rsync_scripts(port, host)
+    # Remote: sync launcher + algorithm source first, then SSH-launch.
+    rsync_code(port, host)
 
     log_remote = f"/tmp/tqd_{task['id']}.log"
     # Build the remote command as a Python string — passed as a SINGLE argument

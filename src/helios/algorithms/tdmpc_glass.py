@@ -261,6 +261,17 @@ def glass_transition_graph(
     s_src = jnp.matmul(c_src, S)
     s_next = jnp.matmul(c_next, S)
     temporal = jnp.mean(jnp.sum((s_src - jax.lax.stop_gradient(s_next)) ** 2, axis=-1))
+    # iter-8 §2.3 Phase-g2: per-pair cosine-similarity penalty on consecutive
+    # cluster distributions. The L2 `temporal` above measures aggregate
+    # drift; this one penalises per-pair flicker (cluster switches within a
+    # single gait phase) which the rollout-video analysis (blog §3)
+    # identifies as the stuck-seed signature. Distinct from `temporal` so
+    # it can be weighted independently via lambda_temp_stability.
+    _eps_sim = 1e-6
+    _src_norm = jnp.linalg.norm(s_src, axis=-1) + _eps_sim
+    _next_norm = jnp.linalg.norm(s_next, axis=-1) + _eps_sim
+    _cos_pair = jnp.sum(s_src * s_next, axis=-1) / (_src_norm * _next_norm)
+    temp_stability = jnp.mean(1.0 - _cos_pair)
 
     se = two_dimensional_structural_entropy(A, assign_logits, is_logits=True)
     entropy = -jnp.sum(cluster_mass * jnp.log(jnp.clip(cluster_mass, eps, 1.0)))
@@ -276,6 +287,7 @@ def glass_transition_graph(
         "balance": balance,
         "proto_balance": proto_balance,
         "temporal": temporal,
+        "temp_stability": temp_stability,
         "entropy": entropy,
         "active_clusters": active.astype(jnp.float32),
         "max_cluster_mass": jnp.max(cluster_mass),
@@ -318,6 +330,7 @@ def glass_loss_and_aux(
     lambda_se: float = 5.0e-3,
     lambda_balance: float = 1.0e-2,
     lambda_temporal: float = 1.0e-3,
+    lambda_temp_stability: float = 0.0,
     stopgrad_graph: bool = False,
     use_cosine_assign: bool = True,
     lambda_super_se: float = 0.0,
@@ -343,12 +356,14 @@ def glass_loss_and_aux(
         lambda_se * diag["se"]
         + lambda_balance * (diag["balance"] + diag["proto_balance"])
         + lambda_temporal * diag["temporal"]
+        + lambda_temp_stability * diag["temp_stability"]
     )
     aux = {
         "glass_se": diag["se"],
         "glass_balance": diag["balance"],
         "glass_proto_balance": diag["proto_balance"],
         "glass_temp": diag["temporal"],
+        "glass_temp_stability": diag["temp_stability"],
         "glass_total": total,
         "glass_entropy": diag["entropy"],
         "glass_active_clusters": diag["active_clusters"],
@@ -635,6 +650,7 @@ def make_update_fn(
     glass_lambda_se: float = 5.0e-3,
     glass_lambda_balance: float = 1.0e-2,
     glass_lambda_temporal: float = 1.0e-3,
+    glass_lambda_temp_stability: float = 0.0,
     glass_stopgrad_graph: bool = False,
     glass_use_cosine_assign: bool = True,
     latent_action_smooth_coef: float = 0.0,
@@ -785,6 +801,7 @@ def make_update_fn(
             "glass_balance": jnp.array(0.0),
             "glass_proto_balance": jnp.array(0.0),
             "glass_temp": jnp.array(0.0),
+            "glass_temp_stability": jnp.array(0.0),
             "glass_total": jnp.array(0.0),
             "glass_entropy": jnp.array(0.0),
             "glass_active_clusters": jnp.array(0.0),
@@ -813,6 +830,7 @@ def make_update_fn(
                 lambda_se=glass_lambda_se,
                 lambda_balance=glass_lambda_balance,
                 lambda_temporal=glass_lambda_temporal,
+                lambda_temp_stability=glass_lambda_temp_stability,
                 stopgrad_graph=glass_stopgrad_graph,
                 use_cosine_assign=glass_use_cosine_assign,
                 lambda_super_se=glass_lambda_super_se,

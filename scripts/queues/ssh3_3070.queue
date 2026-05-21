@@ -8,4 +8,4 @@
 # 2026-05-19: Phase-aa moved to idle ssh17637_gpu1/ssh3_3060ti; leave ssh3_3070 free.
 # MOVED 15229|ssh3.vast.ai|scripts/run_phaseaa_codex_kupdate_sweep.sh|K_UPDATES='64 256' XLA_PYTHON_CLIENT_MEM_FRACTION=0.55
 # 2026-05-20: phase1b_10m seeds 4-5
-15229|ssh3.vast.ai|scripts/run_phase1b_10m.sh|SEEDS="4 5" XLA_PYTHON_CLIENT_MEM_FRACTION=0.55
+# DONE 12:32:18Z 15229|ssh3.vast.ai|scripts/run_phase1b_10m.sh|SEEDS="4 5" XLA_PYTHON_CLIENT_MEM_FRACTION=0.55

@@ -348,6 +348,7 @@ def make_update_fn(
     latent_action_smooth_coef: float = 0.0,
     consistency_coef: float = 2.0,
     smoothing_enabled: bool = True,
+    mpc_distill_enabled: bool = False,
 ) -> tuple:
     """Build (single_step, multi_step) JIT-compiled update functions.
 
@@ -370,7 +371,8 @@ def make_update_fn(
         (single_step, multi_step) — both @jax.jit compiled.
     """
 
-    def loss_fn(params, tp, obs_b, act_b, rew_b, done_b, rng, scale):
+    def loss_fn(params, tp, obs_b, act_b, rew_b, done_b, rng, scale,
+                mpc_obs_anchor, mpc_action_target, mpc_distill_coef):
         B, T, _ = obs_b.shape
         z_all = enc.apply(params["enc"], obs_b.reshape(B * T, -1)).reshape(B, T, -1)
         z0    = z_all[:, 0]
@@ -455,19 +457,30 @@ def make_update_fn(
             all_pi_mean = jax.vmap(_pi_mean_at_z)(z_t_T)  # (T-1, B, act_dim)
             smooth_loss = jnp.mean(jnp.sum((all_pi_mean[1:] - all_pi_mean[:-1]) ** 2, axis=-1))
             total = total + latent_action_smooth_coef * smooth_loss
+        if mpc_distill_enabled:
+            z_anchor = enc.apply(params["enc"], mpc_obs_anchor)
+            pi_anchor_mean, _ = pi_net.apply(params["pi"], jax.lax.stop_gradient(z_anchor))
+            pi_anchor_mean = jnp.tanh(pi_anchor_mean)
+            mpc_loss = jnp.mean(jnp.sum((pi_anchor_mean - jax.lax.stop_gradient(mpc_action_target)) ** 2, axis=-1))
+            total = total + mpc_distill_coef * mpc_loss
+        else:
+            mpc_loss = jnp.array(0.0)
         aux = {
             "c": jnp.sum(cls) / n,
             "r": jnp.sum(rls) / n,
             "v": jnp.sum(vls) / n,
             "p": jnp.sum(pls) / n,
+            "mpc": mpc_loss,
             "scale": final_scale,
         }
         return total, aux
 
     @jax.jit
-    def single_step(params, tp, opt, ob, ab, rb, db, rng, scale):
+    def single_step(params, tp, opt, ob, ab, rb, db, rng, scale,
+                    mpc_obs_anchor, mpc_action_target, mpc_distill_coef):
         (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(
-            params, tp, ob, ab, rb, db, rng, scale
+            params, tp, ob, ab, rb, db, rng, scale,
+            mpc_obs_anchor, mpc_action_target, mpc_distill_coef,
         )
         upd, nopt = tx.update(grads, opt, params)
         new_params = optax.apply_updates(params, upd)
@@ -477,7 +490,8 @@ def make_update_fn(
         return new_params, new_tp, nopt, loss, aux
 
     @jax.jit
-    def multi_step(params, tp, opt, all_obs, all_acts, all_rews, all_done, key, scale):
+    def multi_step(params, tp, opt, all_obs, all_acts, all_rews, all_done, key, scale,
+                   mpc_obs_anchor, mpc_action_target, mpc_distill_coef):
         """K gradient updates in one JIT dispatch via jax.lax.scan.
 
         Scale is carried across gradient steps so that the RunningScale
@@ -489,7 +503,8 @@ def make_update_fn(
             ob, ab, rb, db = batch
             key, uk = jax.random.split(key)
             (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(
-                params, tp, ob, ab, rb, db, uk, scale
+                params, tp, ob, ab, rb, db, uk, scale,
+                mpc_obs_anchor, mpc_action_target, mpc_distill_coef,
             )
             upds, nopt = tx.update(grads, opt, params)
             new_params = optax.apply_updates(params, upds)

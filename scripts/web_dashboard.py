@@ -461,32 +461,80 @@ def read_curve(csv_path):
     return points
 
 
-def best_and_last(csv_path):
-    """Return (best_mppi, best_step, last_mppi, last_step) for a phase-seed CSV.
-    All -1.0 if no mppi rows present."""
-    best = -1.0
-    best_step = -1
-    last = -1.0
-    last_step = -1
+def eval_summary(csv_path):
+    """Return per-seed pi/mppi summary derived from the eval-type CSV."""
+    stats = {
+        "best_pi": -1.0,
+        "best_pi_step": -1,
+        "best_mppi": -1.0,
+        "best_mppi_step": -1,
+        "best_any": -1.0,
+        "best_any_step": -1,
+        "best_any_selector": None,
+        "last_pi": -1.0,
+        "last_pi_step": -1,
+        "last_mppi": -1.0,
+        "last_mppi_step": -1,
+        "pi_minus_mppi_last": None,
+    }
+    pairs: dict[int, dict[str, float]] = {}
     try:
         with open(csv_path) as f:
             reader = csv.DictReader(f)
             for row in reader:
-                if row.get("eval_type") != "mppi":
+                et = row.get("eval_type")
+                if et not in ("pi", "mppi"):
                     continue
                 try:
                     r = float(row.get("reward", 0))
                     s = int(float(row.get("step", 0)))
                 except (ValueError, TypeError):
                     continue
-                if r > best:
-                    best = r
-                    best_step = s
-                last = r
-                last_step = s
+                key_best = f"best_{et}"
+                key_best_step = f"best_{et}_step"
+                key_last = f"last_{et}"
+                key_last_step = f"last_{et}_step"
+                if r > stats[key_best]:
+                    stats[key_best] = r
+                    stats[key_best_step] = s
+                stats[key_last] = r
+                stats[key_last_step] = s
+                pair = pairs.setdefault(s, {})
+                pair[et] = r
     except Exception:
-        pass
-    return best, best_step, last, last_step
+        return stats
+
+    if stats["best_pi"] >= 0 or stats["best_mppi"] >= 0:
+        if stats["best_pi"] >= stats["best_mppi"]:
+            stats["best_any"] = stats["best_pi"]
+            stats["best_any_step"] = stats["best_pi_step"]
+            stats["best_any_selector"] = "pi"
+        else:
+            stats["best_any"] = stats["best_mppi"]
+            stats["best_any_step"] = stats["best_mppi_step"]
+            stats["best_any_selector"] = "mppi"
+
+    last_shared_step = -1
+    for step, pair in pairs.items():
+        if "pi" in pair and "mppi" in pair and step >= last_shared_step:
+            last_shared_step = step
+            stats["pi_minus_mppi_last"] = pair["pi"] - pair["mppi"]
+    return stats
+
+
+def _fmt_metric(v):
+    return round(v, 1) if isinstance(v, (int, float)) and v >= 0 else None
+
+
+def ckpt_candidates(phase: str, seed: str):
+    """Locate best_{any,pi,mppi}.pkl paths for a phase+seed, newest first."""
+    out = {}
+    ckpt_dir = LOCAL_EXP / f"HopperHop_{phase}" / f"seed_{seed}" / "checkpoints"
+    for selector in ("any", "pi", "mppi"):
+        p = ckpt_dir / f"best_{selector}.pkl"
+        if p.exists():
+            out[selector] = p
+    return out
 
 
 def read_diag_last_mppi(diag_path: str) -> dict | None:
@@ -532,11 +580,18 @@ JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
 
 
-def find_best_ckpt(phase: str, seed: str):
-    """Locate best_mppi.pkl for a phase+seed under exp/tdmpc_glass/."""
-    candidates = list(LOCAL_EXP.rglob(f"HopperHop_{phase}/seed_{seed}/checkpoints/best_mppi.pkl"))
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0] if candidates else None
+def find_best_ckpt(phase: str, seed: str, selector: str = "any"):
+    """Locate a best_{selector}.pkl checkpoint, falling back across selectors."""
+    candidates = ckpt_candidates(phase, seed)
+    order = {
+        "any": ("any", "mppi", "pi"),
+        "mppi": ("mppi", "any", "pi"),
+        "pi": ("pi", "any", "mppi"),
+    }.get(selector, ("any", "mppi", "pi"))
+    for key in order:
+        if key in candidates:
+            return candidates[key], key
+    return None, None
 
 
 _VIDEO_NAME_PAT = re.compile(r"seed_?(\d+)", re.I)
@@ -813,8 +868,11 @@ def api_boxes():
                 # Even if no CSV yet, we still want to surface the phase name.
                 if picked is None:
                     p["phase"] = phase_from_env
-                    p["best_mppi"] = p["last_mppi"] = None
-                    p["best_step"] = p["last_step"] = None
+                    p["best_pi"] = p["best_mppi"] = p["best_any"] = None
+                    p["last_pi"] = p["last_mppi"] = None
+                    p["best_pi_step"] = p["best_mppi_step"] = p["best_any_step"] = None
+                    p["last_pi_step"] = p["last_mppi_step"] = None
+                    p["pi_minus_mppi_last"] = None
                     continue
             if picked is None:
                 same_seed = [c for c in csv_index if c["seed"] == seed]
@@ -823,18 +881,33 @@ def api_boxes():
                 cand.sort(key=lambda r: r["mtime"], reverse=True)
                 picked = cand[0] if cand else None
             if picked:
-                best, best_step, last, last_step = best_and_last(picked["path"])
+                summary = eval_summary(picked["path"])
                 p["phase"] = picked["phase"]
-                p["best_mppi"] = round(best, 1) if best >= 0 else None
-                p["best_step"] = best_step if best_step >= 0 else None
-                p["last_mppi"] = round(last, 1) if last >= 0 else None
-                p["last_step"] = last_step if last_step >= 0 else None
+                p["best_pi"] = _fmt_metric(summary["best_pi"])
+                p["best_pi_step"] = summary["best_pi_step"] if summary["best_pi_step"] >= 0 else None
+                p["best_mppi"] = _fmt_metric(summary["best_mppi"])
+                p["best_mppi_step"] = summary["best_mppi_step"] if summary["best_mppi_step"] >= 0 else None
+                p["best_any"] = _fmt_metric(summary["best_any"])
+                p["best_any_step"] = summary["best_any_step"] if summary["best_any_step"] >= 0 else None
+                p["best_any_selector"] = summary["best_any_selector"]
+                p["last_pi"] = _fmt_metric(summary["last_pi"])
+                p["last_pi_step"] = summary["last_pi_step"] if summary["last_pi_step"] >= 0 else None
+                p["last_mppi"] = _fmt_metric(summary["last_mppi"])
+                p["last_mppi_step"] = summary["last_mppi_step"] if summary["last_mppi_step"] >= 0 else None
+                p["last_step"] = p["last_mppi_step"] or p["last_pi_step"]
+                p["pi_minus_mppi_last"] = (
+                    round(summary["pi_minus_mppi_last"], 1)
+                    if summary["pi_minus_mppi_last"] is not None else None
+                )
                 diag_path = picked["path"].replace(".csv", "_diag.csv")
                 p["diag"] = read_diag_last_mppi(diag_path)
             else:
                 p["phase"] = None
-                p["best_mppi"] = p["last_mppi"] = None
-                p["best_step"] = p["last_step"] = None
+                p["best_pi"] = p["best_mppi"] = p["best_any"] = None
+                p["last_pi"] = p["last_mppi"] = None
+                p["best_pi_step"] = p["best_mppi_step"] = p["best_any_step"] = None
+                p["last_pi_step"] = p["last_mppi_step"] = p["last_step"] = None
+                p["pi_minus_mppi_last"] = None
                 p["diag"] = None
             # Approximate live SPS = last_step / (etime - JIT_warmup). Underestimates
             # at short runs while JIT dominates; settles to true sps by ~1M env steps.
@@ -878,8 +951,7 @@ def api_curves():
 
 @app.route("/api/checkpoints")
 def api_checkpoints():
-    """List (phase, seed) tuples for which a best_mppi.pkl exists locally,
-    annotated with best/last MPPI reward and sorted by best DESC."""
+    """List checkpointed seeds with best_any / pi / mppi summary."""
     out = []
     # Build CSV index once, keyed by (phase, seed) → path
     by_key = {}
@@ -887,21 +959,23 @@ def api_checkpoints():
         by_key[(c["phase"], c["seed"])] = c["path"]
     seen: dict[tuple, dict] = {}  # (phase, seed) → checkpoint dict
     videos_by_key = discover_existing_videos()
-    for pkl in LOCAL_EXP.rglob("HopperHop_*/seed_*/checkpoints/best_mppi.pkl"):
-        phase = pkl.parents[2].name.replace("HopperHop_", "")
-        seed = pkl.parents[1].name.replace("seed_", "")
+    for ckpt_dir in LOCAL_EXP.rglob("HopperHop_*/seed_*/checkpoints"):
+        phase = ckpt_dir.parents[1].name.replace("HopperHop_", "")
+        seed = ckpt_dir.parent.name.replace("seed_", "")
         key = (phase, seed)
+        candidates = ckpt_candidates(phase, seed)
+        if not candidates:
+            continue
+        preferred = candidates.get("any") or candidates.get("mppi") or candidates.get("pi")
         try:
-            st = pkl.stat()
+            st = preferred.stat()
         except OSError:
             continue
         prev = seen.get(key)
         if prev is not None and prev["mtime"] >= st.st_mtime:
             continue  # keep older one if it's somehow more recent
         csv_path = by_key.get(key)
-        best, best_step, last, last_step = (-1, -1, -1, -1)
-        if csv_path:
-            best, best_step, last, last_step = best_and_last(csv_path)
+        summary = eval_summary(csv_path) if csv_path else eval_summary("/dev/null")
         # Pre-existing rendered videos (archive + new) for this checkpoint
         archive_videos = videos_by_key.get(key, [])
         job_videos = []
@@ -916,16 +990,30 @@ def api_checkpoints():
                     })
         seen[key] = {
             "phase": phase, "seed": seed,
-            "ckpt": str(pkl), "mtime": st.st_mtime,
+            "ckpt": str(preferred), "mtime": st.st_mtime,
             "size_mb": round(st.st_size / 1e6, 1),
-            "best_mppi": round(best, 1) if best >= 0 else None,
-            "best_step": best_step if best_step >= 0 else None,
-            "last_mppi": round(last, 1) if last >= 0 else None,
+            "ckpt_type": next((k for k, v in candidates.items() if v == preferred), None),
+            "available_ckpts": sorted(candidates.keys()),
+            "best_pi": _fmt_metric(summary["best_pi"]),
+            "best_pi_step": summary["best_pi_step"] if summary["best_pi_step"] >= 0 else None,
+            "best_mppi": _fmt_metric(summary["best_mppi"]),
+            "best_mppi_step": summary["best_mppi_step"] if summary["best_mppi_step"] >= 0 else None,
+            "best_any": _fmt_metric(summary["best_any"]),
+            "best_any_step": summary["best_any_step"] if summary["best_any_step"] >= 0 else None,
+            "best_any_selector": summary["best_any_selector"],
+            "last_pi": _fmt_metric(summary["last_pi"]),
+            "last_pi_step": summary["last_pi_step"] if summary["last_pi_step"] >= 0 else None,
+            "last_mppi": _fmt_metric(summary["last_mppi"]),
+            "last_mppi_step": summary["last_mppi_step"] if summary["last_mppi_step"] >= 0 else None,
+            "pi_minus_mppi_last": (
+                round(summary["pi_minus_mppi_last"], 1)
+                if summary["pi_minus_mppi_last"] is not None else None
+            ),
             "videos": archive_videos + job_videos,
         }
     out = list(seen.values())
     # Sort: known reward DESC, then unknown by phase
-    out.sort(key=lambda r: (-(r["best_mppi"] if r["best_mppi"] is not None else -1.0),
+    out.sort(key=lambda r: (-(r["best_any"] if r["best_any"] is not None else -1.0),
                             r["phase"]))
     return jsonify({"checkpoints": out})
 
@@ -937,13 +1025,14 @@ def api_render():
     seed = data.get("seed")
     env_id = data.get("env_id", "HopperHop")
     camera = data.get("camera", "cam0")
+    ckpt_type = str(data.get("ckpt_type", "any"))
     n_episodes = int(data.get("n_episodes", 2))
     episode_length = int(data.get("episode_length", 1000))
     if not phase or seed is None:
         return jsonify({"error": "phase + seed required"}), 400
-    ckpt = find_best_ckpt(phase, str(seed))
+    ckpt, ckpt_type_used = find_best_ckpt(phase, str(seed), ckpt_type)
     if not ckpt:
-        return jsonify({"error": f"no best_mppi.pkl for {phase}/seed_{seed}"}), 404
+        return jsonify({"error": f"no best checkpoint for {phase}/seed_{seed}"}), 404
     # If a render for this (phase, seed) is already in flight, return its job_id
     # rather than starting a duplicate.
     with JOBS_LOCK:
@@ -957,6 +1046,7 @@ def api_render():
             "phase": phase, "seed": str(seed), "env_id": env_id, "camera": camera,
             "n_episodes": n_episodes, "episode_length": episode_length,
             "ckpt": str(ckpt),
+            "ckpt_type": ckpt_type_used,
             "status": "queued", "progress": 0.0, "log": [], "video": None,
             "started_at": time.time(),
         }
@@ -1022,7 +1112,7 @@ def api_jobs():
 
 @app.route("/api/phases")
 def api_phases():
-    """Per-CANONICAL-phase aggregated MPPI stats.
+    """Per-CANONICAL-phase aggregated best-any stats.
 
     Seeds from phasex_local, phasex_4060, phasex_2x3060, etc. are all merged
     under canonical name "phasex" so the browser shows one aggregated row.
@@ -1042,7 +1132,7 @@ def api_phases():
         variants = sorted(info["variants"])
         bests = []
         for path in paths:
-            best, _, _, _ = best_and_last(path)
+            best = eval_summary(path)["best_any"]
             if best >= 0:
                 bests.append(best)
         n = len(bests)
@@ -1196,7 +1286,7 @@ def _sps_remaining_s(task: dict) -> float | None:
     if not sps or sps <= 0:
         return None
     last_step = proc.get("last_step") or 0
-    best_step = proc.get("best_step") or 0
+    best_step = proc.get("best_any_step") or proc.get("best_mppi_step") or 0
     steps_since_best = max(0, last_step - best_step)
     patience_left = max(0, _PATIENCE_STEPS - steps_since_best)
     effective_target = min(_MAX_STEPS, last_step + patience_left)
@@ -1307,7 +1397,7 @@ def _compute_queue_etas(tasks: list[dict]) -> tuple[list[dict], str | None]:
                     proc = (matched or procs)[0]
                     t["_live_sps"] = proc.get("sps_avg")
                     t["_live_last_step"] = proc.get("last_step")
-                    t["_live_best_reward"] = proc.get("best_mppi")
+                    t["_live_best_reward"] = proc.get("best_any") or proc.get("best_mppi")
         elif t["status"] == "pending" and t["id"] in sched:
             start, finish = sched[t["id"]]
             t["estimated_start_iso"] = to_iso(start)
@@ -1402,13 +1492,13 @@ def api_queue_retry(task_id):
 
 @app.route("/api/queue/<task_id>/log")
 def api_queue_task_log(task_id):
-    """Return last 60 lines of the task's remote log (/tmp/fleet_<id>.log)."""
+    """Return last 60 lines of the task's remote log (/tmp/tqd_<id>.log)."""
     tasks = _load_central_queue()
     task = next((t for t in tasks if t["id"] == task_id), None)
     if not task:
         return jsonify({"error": "task not found"}), 404
     box_tag = task.get("box")
-    log_path = f"/tmp/fleet_{task_id}.log"
+    log_path = f"/tmp/tqd_{task_id}.log"
     box_info = next((b for b in BOXES if b[0] == box_tag), None)
     try:
         if box_tag == "local":
@@ -1448,9 +1538,9 @@ def api_queue_render_add():
     episode_length = int(body.get("episode_length", 250))
     if not phase or not seed:
         return jsonify({"error": "phase + seed required"}), 400
-    ckpt = find_best_ckpt(phase, seed)
+    ckpt, ckpt_type_used = find_best_ckpt(phase, seed, "any")
     if not ckpt:
-        return jsonify({"error": f"no best_mppi.pkl for {phase}/seed_{seed}"}), 404
+        return jsonify({"error": f"no best checkpoint for {phase}/seed_{seed}"}), 404
     task = {
         "id": "t" + uuid.uuid4().hex[:7],
         "label": f"render {phase} s{seed} ({n_episodes}×{episode_length}steps)",
@@ -1465,6 +1555,7 @@ def api_queue_render_add():
             "episode_length": episode_length,
             "phase": phase,
             "seed": seed,
+            "ckpt_type": ckpt_type_used,
         },
         "priority": 1,
         "status": "pending",
@@ -1974,13 +2065,21 @@ function loadCheckpoints(){
   fetch('/api/checkpoints').then(r=>r.json()).then(j=>{
     const root = $('#ckpts'); root.innerHTML = '';
     if (!j.checkpoints.length) { root.innerHTML = '<span class="small">no checkpoints found yet</span>'; return; }
-    j.checkpoints.sort((a,b)=> (b.best_mppi ?? -1) - (a.best_mppi ?? -1));
+    j.checkpoints.sort((a,b)=> (b.best_any ?? -1) - (a.best_any ?? -1));
     j.checkpoints.forEach(c=>{
       const card = document.createElement('div');
       card.className = 'video-card';
-      const v = c.best_mppi;
-      const badgeCls = v==null ? 'gray' : (v>=500 ? 'green' : 'gray');
-      const badgeText = v==null ? '— MPPI' : `MPPI ${v.toFixed(1)}`;
+      const vAny = c.best_any;
+      const vPi = c.best_pi;
+      const vMppi = c.best_mppi;
+      const gap = c.pi_minus_mppi_last;
+      const badgeCls = vAny==null ? 'gray' : (vAny>=500 ? 'green' : 'gray');
+      const badgeText = vAny==null ? '— ANY' : `ANY ${vAny.toFixed(1)} (${c.best_any_selector || '—'})`;
+      const piBadge = vPi==null ? 'pi —' : `pi ${vPi.toFixed(1)}`;
+      const mppiBadge = vMppi==null ? 'mppi —' : `mppi ${vMppi.toFixed(1)}`;
+      const gapBadge = gap==null ? '' : (gap >= 100
+        ? `<span class="pill gray" title="pi - mppi at last shared eval step">pi>mppi +${gap.toFixed(1)}</span>`
+        : (gap <= -100 ? `<span class="pill gray" title="pi - mppi at last shared eval step">mppi>pi ${gap.toFixed(1)}</span>` : ''));
       const key = renderKey(c.phase, c.seed);
       const busy = ACTIVE_RENDER_KEYS.has(key);
       const failed = LAST_RENDER_FAILURES.get(key);
@@ -1995,8 +2094,11 @@ function loadCheckpoints(){
       card.innerHTML = `
         <div><b>${c.phase}</b> · seed ${c.seed}
           <span class="pill ${badgeCls}">${badgeText}</span>
+          <span class="pill gray">${piBadge}</span>
+          <span class="pill gray">${mppiBadge}</span>
+          ${gapBadge}
         </div>
-        <div class="small">last ${c.last_mppi==null?'—':c.last_mppi.toFixed(1)} · ${c.size_mb} MB · ${new Date(c.mtime*1000).toLocaleString()}</div>
+        <div class="small">last pi ${c.last_pi==null?'—':c.last_pi.toFixed(1)} · last mppi ${c.last_mppi==null?'—':c.last_mppi.toFixed(1)} · ckpt ${c.ckpt_type || '—'} · ${c.size_mb} MB · ${new Date(c.mtime*1000).toLocaleString()}</div>
         <button data-phase="${c.phase}" data-seed="${c.seed}" ${busy?'disabled':''}>${btnLabel}</button>
         ${failHTML}
         ${videosHTML}
@@ -2286,8 +2388,11 @@ function loadBoxes(){
         const tag = (p.tag||'').split('+').filter(Boolean).map(t=>`<span class="chip ${t}">${t}</span>`).join('');
         const phaseStr = p.phase ? `<b>${p.phase}</b>` : '<span class="small">(no csv yet)</span>';
         const dupChip = (p.dup_count && p.dup_count > 1) ? `<span class="chip" style="background:#54391c;color:#e0a44c" title="more than one process found for this seed+phase — likely zombie">${p.dup_count}× DUP</span>` : '';
+        const gapChip = (p.pi_minus_mppi_last != null && p.pi_minus_mppi_last >= 100)
+          ? `<span class="chip" style="background:#54391c;color:#e0a44c" title="pi - mppi at last shared eval">pi>mppi +${p.pi_minus_mppi_last.toFixed(1)}</span>`
+          : '';
         return `<div class="mono" style="line-height:1.5">
-          ${phaseStr} · s${p.seed} · best ${fmtMppi(p.best_mppi)}${fmtStep(p.best_step)} · last ${fmtMppi(p.last_mppi)}${fmtStep(p.last_step)} ${dupChip}
+          ${phaseStr} · s${p.seed} · any ${fmtMppi(p.best_any)}${fmtStep(p.best_any_step)} · pi ${fmtMppi(p.best_pi)}${fmtStep(p.best_pi_step)} · mppi ${fmtMppi(p.best_mppi)}${fmtStep(p.best_mppi_step)} ${dupChip} ${gapChip}
           <div class="small" style="opacity:.7">PID ${p.pid} · ${p.etime} · ${p.algo} NS=${p.ns} ${tag}</div>
         </div>`;
       }).join('') || '<span class="small">(idle)</span>';
@@ -2328,16 +2433,22 @@ function riCardHtml(task) {
   // Training section
   const sps = proc ? (proc.sps_avg != null ? proc.sps_avg + '/s' : '—') : '—';
   const lastStep = proc && proc.last_step != null ? (proc.last_step/1e6).toFixed(2)+'M' : '—';
+  const bestAny = proc && proc.best_any != null ? proc.best_any.toFixed(1) : '—';
+  const bestAnyStep = proc && proc.best_any_step != null ? (proc.best_any_step/1e6).toFixed(2)+'M' : '—';
+  const bestAnySel = proc && proc.best_any_selector ? proc.best_any_selector : '—';
+  const bestPi = proc && proc.best_pi != null ? proc.best_pi.toFixed(1) : '—';
+  const bestPiStep = proc && proc.best_pi_step != null ? (proc.best_pi_step/1e6).toFixed(2)+'M' : '—';
   const bestMppi = proc && proc.best_mppi != null ? proc.best_mppi.toFixed(1) : '—';
-  const bestStep = proc && proc.best_step != null ? (proc.best_step/1e6).toFixed(2)+'M' : '—';
+  const bestMppiStep = proc && proc.best_mppi_step != null ? (proc.best_mppi_step/1e6).toFixed(2)+'M' : '—';
+  const lastPi = proc && proc.last_pi != null ? proc.last_pi.toFixed(1) : '—';
   const lastMppi = proc && proc.last_mppi != null ? proc.last_mppi.toFixed(1) : '—';
+  const piMinusMppi = proc && proc.pi_minus_mppi_last != null ? proc.pi_minus_mppi_last.toFixed(1) : '—';
 
   // Patience remaining (from live SPS data)
   let patienceHtml = '—';
-  if (proc && proc.last_step != null && proc.best_step != null) {
-    const stepsSinceBest = Math.max(0, proc.last_step - proc.best_step);
+  if (proc && proc.last_step != null && proc.best_any_step != null) {
+    const stepsSinceBest = Math.max(0, proc.last_step - proc.best_any_step);
     const patienceLeft = Math.max(0, 3000000 - stepsSinceBest);
-    const patiencePct = Math.round((1 - patienceLeft/3000000)*100);
     const patienceM = (patienceLeft/1e6).toFixed(1);
     const col = patienceLeft < 500000 ? 'var(--bad)' : (patienceLeft < 1500000 ? 'var(--warn)' : 'var(--good)');
     patienceHtml = `<span style="color:${col}">${patienceM}M left</span>`;
@@ -2360,12 +2471,12 @@ function riCardHtml(task) {
   // Artifacts section
   const envDisplay = (task.env||'').trim() || '(none)';
   const cmd = `${envDisplay} bash ${task.launcher||''}`;
-  const logPath = `/tmp/fleet_${task.id}.log (on ${task.box||'?'})`;
+  const logPath = `/tmp/tqd_${task.id}.log (on ${task.box||'?'})`;
   // Guess output dir from seed + output_tag (from proc if available)
   const outputTag = proc ? (proc.output_tag||'') : '';
   const seedStr = taskSeed || (proc ? proc.seed : '?');
   const outputDir = outputTag ? `exp/tdmpc_glass/HopperHop_${outputTag}/seed_${seedStr}/` : '—';
-  const ckptPath = outputTag ? `${outputDir}checkpoints/best_mppi.pkl` : '—';
+  const ckptPath = outputTag ? `${outputDir}checkpoints/best_any.pkl` : '—';
 
   const isOpen = RI_OPEN.has(task.id);
   return `
@@ -2389,9 +2500,13 @@ function riCardHtml(task) {
         <div class="ri-section-title">Training Progress</div>
         <div class="ri-row"><span class="ri-key">SPS</span><span class="ri-val">${sps}</span></div>
         <div class="ri-row"><span class="ri-key">Last step</span><span class="ri-val">${lastStep}</span></div>
+        <div class="ri-row"><span class="ri-key">Last pi</span><span class="ri-val">${lastPi}</span></div>
         <div class="ri-row"><span class="ri-key">Last MPPI</span><span class="ri-val">${lastMppi}</span></div>
-        <div class="ri-row"><span class="ri-key">Best MPPI</span><span class="ri-val box-good">${bestMppi}</span></div>
-        <div class="ri-row"><span class="ri-key">Best @step</span><span class="ri-val">${bestStep}</span></div>
+        <div class="ri-row"><span class="ri-key">pi - MPPI</span><span class="ri-val">${piMinusMppi}</span></div>
+        <div class="ri-row"><span class="ri-key">Best any</span><span class="ri-val box-good">${bestAny} (${bestAnySel})</span></div>
+        <div class="ri-row"><span class="ri-key">Best any @step</span><span class="ri-val">${bestAnyStep}</span></div>
+        <div class="ri-row"><span class="ri-key">Best pi</span><span class="ri-val">${bestPi} @ ${bestPiStep}</span></div>
+        <div class="ri-row"><span class="ri-key">Best MPPI</span><span class="ri-val">${bestMppi} @ ${bestMppiStep}</span></div>
         <div class="ri-row"><span class="ri-key">Patience left</span><span class="ri-val">${patienceHtml}</span></div>
         <div class="ri-row"><span class="ri-key">ETA</span><span class="ri-val">${etaStr}</span></div>
         <div class="ri-section-title" style="margin-top:8px">Behaviour Diag (last eval)</div>

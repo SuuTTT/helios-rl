@@ -13,15 +13,17 @@ LOGS=$LOCAL/logs_mirror
 sync_box() {
   local port=$1 host=$2 dest=$3
   mkdir -p "$dest"
-  timeout 60 rsync -a -e "ssh -p $port -o StrictHostKeyChecking=no \
-        -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
-        -o BatchMode=yes" \
+  # Mirror only the HopperHop_*/ directories' CSVs (eval + diag).
+  # Earlier --include rules broke when phase tags grew long; use --filter rules
+  # in classic rsync syntax: P (protect) and explicit dir include.
+  timeout 60 rsync -av --prune-empty-dirs \
+        -e "ssh -i /home/coder/.ssh/id_ed25519 -p $port -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+            -o BatchMode=yes" \
         --include='HopperHop_*/' \
         --include='HopperHop_*/seed_*.csv' \
         --include='HopperHop_*/seed_*_diag.csv' \
-        --include='HopperHop_*/**' \
-        --exclude='**/checkpoints/**' --exclude='**/checkpoints' \
-        --exclude='**/*.pkl' \
+        --exclude='*' \
         root@$host:/root/helios-rl/exp/tdmpc_glass/ \
         "$dest/" >/dev/null 2>&1
 }

@@ -504,6 +504,15 @@ def train_tdmpc2(
     soft_stand_bonus: float = 0.0,
     soft_stand_floor: float = 0.4,
     soft_anneal_steps: int = 0,
+    # iter-7 §2.1 — Phase-ar auto-restart on plateau (basin-lottery escape)
+    restart_on_plateau: bool = False,
+    restart_check_at: int = 1_000_000,
+    restart_threshold: float = 100.0,
+    restart_max_attempts: int = 3,
+    mpc_distill_coef: float = 0.0,
+    mpc_distill_anneal_steps: int = 3_000_000,
+    mpc_distill_disable_gap: float = 100.0,
+    mpc_distill_batch_size: int = 16,
 ) -> None:
     """Train TD-MPC2 or TD-MPC-Glass."""
     algo_name = "TD-MPC-Glass" if use_glass else "TD-MPC2"
@@ -668,12 +677,24 @@ def train_tdmpc2(
     _smooth_warmup = int(latent_smooth_warmup_env_steps)
     _curriculum_active = _smooth_warmup > 0 and _smooth_target > 0
     _smooth_curr = 0.0 if _curriculum_active else _smooth_target
+    _mpc_distill_target_coef = max(float(mpc_distill_coef), 0.0)
+    _mpc_distill_anneal_steps = max(int(mpc_distill_anneal_steps), 1)
+    _mpc_distill_disable_gap = float(mpc_distill_disable_gap)
+    _mpc_distill_batch_size = max(int(mpc_distill_batch_size), 1)
+    _mpc_distill_enabled = (not use_glass) and _mpc_distill_target_coef > 0
     if _smooth_target > 0 or _consistency_coef != 2.0:
         if _curriculum_active:
             print(f"  loss-coef: consistency={_consistency_coef} latent_action_smooth={_smooth_target} CURRICULUM "
                   f"(0 until {_smooth_warmup:,} env-steps, then ramp to target)", flush=True)
         else:
             print(f"  loss-coef overrides: consistency={_consistency_coef} latent_action_smooth={_smooth_target}", flush=True)
+    if _mpc_distill_enabled:
+        print(
+            f"  Phase-mpc-lite active: coef={_mpc_distill_target_coef:.3f} "
+            f"anneal_steps={_mpc_distill_anneal_steps:,} disable_gap={_mpc_distill_disable_gap:.1f} "
+            f"anchor_batch={_mpc_distill_batch_size}",
+            flush=True,
+        )
 
     def _build_multi_step(smooth_coef: float):
         # smoothing_enabled controls whether the vmap-over-pi smoothing forward
@@ -692,6 +713,7 @@ def train_tdmpc2(
                 glass_lambda_se=glass_cfg.get("lambda_se", 5.0e-3),
                 glass_lambda_balance=glass_cfg.get("lambda_balance", 1.0e-2),
                 glass_lambda_temporal=glass_cfg.get("lambda_temporal", 1.0e-3),
+                glass_lambda_temp_stability=float(glass_cfg.get("lambda_temp_stability") or 0.0),
                 glass_stopgrad_graph=glass_cfg.get("stopgrad_graph", True),
                 glass_use_cosine_assign=glass_cfg.get("use_cosine_assign", True),
                 latent_action_smooth_coef=smooth_coef,
@@ -709,6 +731,7 @@ def train_tdmpc2(
                 latent_action_smooth_coef=smooth_coef,
                 consistency_coef=_consistency_coef,
                 smoothing_enabled=smoothing_enabled,
+                mpc_distill_enabled=_mpc_distill_enabled,
             )
         return ms
 
@@ -751,6 +774,17 @@ def train_tdmpc2(
         z_in = _aug(z, p["glass"], _proto_T) if _use_cluster_obs else z
         mu, _ = pi_net.apply(p["pi"], z_in)
         return jnp.tanh(mu)
+    _mpc_mu0 = jnp.zeros((H, act_dim))
+    _mpc_std0 = jnp.full((H, act_dim), MAX_STD)
+    @jax.jit
+    def batch_mppi_targets(p, obs_batch, plan_key):
+        keys = jax.random.split(plan_key, obs_batch.shape[0])
+        mu_b = jnp.broadcast_to(_mpc_mu0, (obs_batch.shape[0], H, act_dim))
+        std_b = jnp.broadcast_to(_mpc_std0, (obs_batch.shape[0], H, act_dim))
+        def _one(obs_i, mu_i, std_i, key_i):
+            act_i, _, _ = plan(p, obs_i, mu_i, std_i, key_i, jnp.bool_(True))
+            return act_i
+        return jax.vmap(_one)(obs_batch, mu_b, std_b, keys)
 
     # ── Buffer (numpy, per-env ring buffer)
     buf  = MultiEnvBuffer(buf_cap, N_ENVS, obs_dim, act_dim, seq_len)
@@ -967,6 +1001,27 @@ def train_tdmpc2(
     ckpt_dir = None
     best_mppi = resume_best_mppi
     best_mppi_step = resume_best_mppi_step
+    # iter-8 §2.0 — Phase-eval: best-pi + best-any tracking. MPPI < pi in
+    # ~17% of runs (mppi_vs_pi_analysis.md); preserve both.
+    best_pi = -float("inf")
+    best_pi_step = 0
+    best_any = -float("inf")
+    best_any_step = 0
+    best_any_selector = ""  # "pi" or "mppi" — which evaluator picked best_any
+
+    # iter-7 §2.1 — Phase-ar auto-restart on plateau tracker
+    # The plateau check fires every restart_check_at env steps. If best_mppi is
+    # still below restart_threshold at the check, re-init pi+q (keep encoder,
+    # dynamics, reward, replay buffer, env state). Up to restart_max_attempts.
+    _restart_count = 0
+    _restart_next_check = int(restart_check_at) if restart_on_plateau else 0
+    if restart_on_plateau:
+        print(
+            f"  Phase-ar plateau detector: check every {restart_check_at:,} env-steps; "
+            f"reset pi+q if best MPPI < {restart_threshold:.0f}; max {restart_max_attempts} attempts.",
+            flush=True,
+        )
+    _mpc_gap_allows_distill = True
     early_stop_triggered = False
     _patience = max(int(early_stop_patience), 0)
     if _patience > 0:
@@ -1011,6 +1066,9 @@ def train_tdmpc2(
     _dummy_act = np.zeros((K_UPDATE, BS, seq_len, act_dim), np.float32)
     _dummy_rew = np.zeros((K_UPDATE, BS, seq_len), np.float32)
     _dummy_don = np.zeros((K_UPDATE, BS, seq_len), np.float32)
+    _dummy_mpc_obs = np.zeros((_mpc_distill_batch_size, obs_dim), np.float32)
+    _dummy_mpc_act = np.zeros((_mpc_distill_batch_size, act_dim), np.float32)
+    _dummy_mpc_coef = jnp.array(0.0, dtype=jnp.float32)
     if use_glass:
         params, tp, opt, key, scale, glass_step, _, _ = multi_step(
             params, tp, opt,
@@ -1024,6 +1082,7 @@ def train_tdmpc2(
             jnp.asarray(_dummy_obs), jnp.asarray(_dummy_act),
             jnp.asarray(_dummy_rew), jnp.asarray(_dummy_don),
             key, scale,
+            jnp.asarray(_dummy_mpc_obs), jnp.asarray(_dummy_mpc_act), _dummy_mpc_coef,
         )
     jax.block_until_ready(scale)
     print(f"  JIT compiled in {time.time()-t_jit:.1f}s", flush=True)
@@ -1176,22 +1235,50 @@ def train_tdmpc2(
                         glass_step, glass_active,
                     )
                 else:
+                    mpc_obs_anchor = jnp.asarray(_dummy_mpc_obs)
+                    mpc_action_target = jnp.asarray(_dummy_mpc_act)
+                    mpc_coef_step = jnp.array(0.0, dtype=jnp.float32)
+                    if _mpc_distill_enabled and env_steps >= EXPL_UNTIL and _mpc_gap_allows_distill:
+                        anneal_frac = min(max((env_steps - EXPL_UNTIL) / _mpc_distill_anneal_steps, 0.0), 1.0)
+                        curr_coef = _mpc_distill_target_coef * (1.0 - anneal_frac)
+                        if curr_coef > 1e-6:
+                            anchor = buf.sample(_mpc_distill_batch_size, rng_np)
+                            if anchor is not None:
+                                anchor_obs = np.asarray(anchor[0][:, 0, :], dtype=np.float32)
+                                mpc_obs_anchor = jnp.asarray(anchor_obs)
+                                key, mpc_k = jax.random.split(key)
+                                mpc_action_target = batch_mppi_targets(params, mpc_obs_anchor, mpc_k)
+                                mpc_coef_step = jnp.array(curr_coef, dtype=jnp.float32)
                     params, tp, opt, key, scale, loss_val, aux = multi_step(
                         params, tp, opt, ob_k, ab_k, rb_k, db_k, key, scale,
+                        mpc_obs_anchor, mpc_action_target, mpc_coef_step,
                     )
 
             if env_steps % log_interval < N_ENVS:
                 elapsed = time.time() - t0
+                _mpc_log = "" if use_glass else f"  mpc={float(aux.get('mpc', 0.0)):.4f}"
                 print(f"  es={env_steps:>9,}  sps={env_steps/max(elapsed,1):.0f}"
-                      f"  loss={float(loss_val):.4f}  scale={float(scale):.2f}", flush=True)
+                      f"  loss={float(loss_val):.4f}  scale={float(scale):.2f}{_mpc_log}", flush=True)
 
             if env_steps >= next_eval:
                 ret, pi_diag = eval_pi(n_eps=5)
                 mppi_ret, mppi_diag = eval_mppi(n_eps=8 if use_glass else 3)
                 elapsed = time.time() - t0
+                _pi_minus_mppi = float(ret) - float(mppi_ret)
+                _gap_marker = "  pi>>MPPI" if _pi_minus_mppi >= 100 else ("  MPPI>>pi" if _pi_minus_mppi <= -100 else "")
                 print(f"  step={env_steps:>9,}  pi_reward={ret:7.1f}"
                       f"  MPPI={mppi_ret:7.1f}"
-                      f"  sps={env_steps/max(elapsed,1):.0f}", flush=True)
+                      f"  sps={env_steps/max(elapsed,1):.0f}{_gap_marker}", flush=True)
+                if _mpc_distill_enabled:
+                    _prev_gate = _mpc_gap_allows_distill
+                    _mpc_gap_allows_distill = (_pi_minus_mppi < _mpc_distill_disable_gap)
+                    if _prev_gate != _mpc_gap_allows_distill:
+                        state = "ENABLED" if _mpc_gap_allows_distill else "DISABLED"
+                        print(
+                            f"    [Phase-mpc-lite] planner distill {state}: "
+                            f"pi-mppi gap={_pi_minus_mppi:.1f} vs disable_gap={_mpc_distill_disable_gap:.1f}",
+                            flush=True,
+                        )
                 # §7.1 diagnostics — per-step reward signal proxies.
                 # full=fraction with reward>0.5 (standing+fast); stand=fraction>0.01 (upright);
                 # falls=transitions from stand→fallen; ttf=first step at full reward (or episode_length if never).
@@ -1258,6 +1345,25 @@ def train_tdmpc2(
                         ckpt_payload["best_mppi"] = best_mppi
                         ckpt_payload["best_mppi_step"] = best_mppi_step
                         save_pickle_atomic(ckpt_dir / "best_mppi.pkl", ckpt_payload)
+                    # iter-8 §2.0 — Phase-eval: track best-pi and best-any.
+                    # MPPI is empirically worse than pi in a large minority of
+                    # runs; preserving best-pi avoids discarding good actors.
+                    if ret > best_pi:
+                        best_pi = ret
+                        best_pi_step = env_steps
+                        ckpt_payload["best_pi"] = best_pi
+                        ckpt_payload["best_pi_step"] = best_pi_step
+                        save_pickle_atomic(ckpt_dir / "best_pi.pkl", ckpt_payload)
+                    _curr_best_pair = max(ret, mppi_ret)
+                    _curr_selector = "pi" if ret >= mppi_ret else "mppi"
+                    if _curr_best_pair > best_any:
+                        best_any = _curr_best_pair
+                        best_any_step = env_steps
+                        best_any_selector = _curr_selector
+                        ckpt_payload["best_any"] = best_any
+                        ckpt_payload["best_any_step"] = best_any_step
+                        ckpt_payload["best_any_selector"] = best_any_selector
+                        save_pickle_atomic(ckpt_dir / "best_any.pkl", ckpt_payload)
                     save_pickle_atomic(ckpt_dir / "latest_eval.pkl", ckpt_payload)
                     if save_full_state:
                         full_payload = {
@@ -1270,6 +1376,50 @@ def train_tdmpc2(
                         }
                         save_pickle_atomic(ckpt_dir / "latest_full.pkl", full_payload)
                 next_eval += eval_interval
+
+                # iter-7 §2.1 — Phase-ar auto-restart on plateau.
+                # Check fires once env_steps crosses each restart_check_at boundary.
+                # If best_mppi is still below threshold, the seed is basin-locked;
+                # re-init pi+q (keep enc/dyn/rew/glass + replay buffer + env state).
+                if (restart_on_plateau
+                        and env_steps >= _restart_next_check
+                        and _restart_count < restart_max_attempts):
+                    if best_mppi < restart_threshold:
+                        _restart_count += 1
+                        pre_restart_best = best_mppi
+                        key, pikey, qkey = jax.random.split(key, 3)
+                        fresh_pi = pi_net.init(pikey, dummy_z_aug)
+                        fresh_q = q_net.init(qkey, dummy_z_aug, dummy_act)
+                        params = {**params, "pi": fresh_pi, "q": fresh_q}
+                        tp = {**tp, "pi": fresh_pi, "q": fresh_q}  # target Q resync
+                        opt = tx.init(params)
+                        # Clear best tracking so early-stop patience resets and a future
+                        # check fires only if the *next* restart_check_at window also
+                        # plateaus.
+                        best_mppi = -float("inf")
+                        best_mppi_step = env_steps
+                        _restart_next_check = env_steps + int(restart_check_at)
+                        print(
+                            f"  [Phase-ar restart {_restart_count}/{restart_max_attempts}] "
+                            f"env_steps={env_steps:,}: pre-restart best MPPI={pre_restart_best:.1f} "
+                            f"< threshold={restart_threshold:.1f}. "
+                            f"Re-init pi+q+target_q+opt (keep enc/dyn/rew/glass/replay/env).",
+                            flush=True,
+                        )
+                        # Log restart marker row to eval CSV so dashboard / analysis can
+                        # see where attempts began.
+                        if eval_type_csv is not None:
+                            with open(eval_type_csv, "a") as cf:
+                                cf.write(f"{env_steps},-1.0,restart_{_restart_count},{seed}\n")
+                    else:
+                        # Crossed the boundary but already above threshold — schedule
+                        # next check without restarting.
+                        _restart_next_check = env_steps + int(restart_check_at)
+                        print(
+                            f"  [Phase-ar] env_steps={env_steps:,} above threshold "
+                            f"(best={best_mppi:.1f} >= {restart_threshold:.1f}); no restart.",
+                            flush=True,
+                        )
 
                 # Early stop: halt if no new best MPPI in the last `_patience` env-steps.
                 if _patience > 0 and best_mppi_step > 0 and (env_steps - best_mppi_step) >= _patience:
@@ -1301,6 +1451,12 @@ def train_tdmpc2(
             "glass_config": dict(glass_cfg) if use_glass else {},
             "best_mppi": best_mppi,
             "best_mppi_step": best_mppi_step,
+            # iter-8 §2.0 — Phase-eval: persist best-pi + best-any with final
+            "best_pi": best_pi,
+            "best_pi_step": best_pi_step,
+            "best_any": best_any,
+            "best_any_step": best_any_step,
+            "best_any_selector": best_any_selector,
         }
         save_pickle_atomic(ckpt_dir / "final.pkl", final_payload)
         if save_full_state:
@@ -1350,6 +1506,10 @@ def parse_args():
                     help="Override TD-MPC-Glass lambda_balance")
     ap.add_argument("--glass_lambda_temporal", type=float, default=None,
                     help="Override TD-MPC-Glass lambda_temporal")
+    ap.add_argument("--glass_lambda_temp_stability", type=float, default=None,
+                    help="Phase-g2: weight on the per-pair cosine-similarity penalty between consecutive "
+                         "soft-cluster distributions. Penalises cluster oscillation within a single gait "
+                         "phase (per blog §3). Default 0 = off; try 0.05.")
     ap.add_argument("--glass_stopgrad_graph", choices=["true", "false"], default=None,
                     help="Override TD-MPC-Glass stopgrad_graph")
     ap.add_argument("--glass_num_prototypes", type=int, default=None,
@@ -1435,6 +1595,33 @@ def parse_args():
     ap.add_argument("--soft_anneal_steps", type=int, default=0,
                     help="Phase-r1: linearly fade --soft_stand_bonus weight from 1.0 -> 0.0 over [0, N] "
                          "env steps so the shaping disappears mid-training. 0 = no fade (full bonus all run).")
+    # iter-7 §2.1 — Phase-ar auto-restart on plateau (basin-lottery escape)
+    ap.add_argument("--restart_on_plateau", action="store_true",
+                    help="Phase-ar: enable plateau-triggered restart of pi+q. At each "
+                         "--restart_check_at boundary, if best MPPI is still below "
+                         "--restart_threshold, re-init pi+q+target_q+opt (encoder, "
+                         "dynamics, reward, replay buffer, env state preserved). "
+                         "Up to --restart_max_attempts attempts per seed. Benchmark-fair.")
+    ap.add_argument("--restart_check_at", type=int, default=1_000_000,
+                    help="Phase-ar: plateau check fires every N env steps (default 1M). "
+                         "First check at env_steps>=N; subsequent checks every additional N.")
+    ap.add_argument("--restart_threshold", type=float, default=100.0,
+                    help="Phase-ar: best MPPI floor below which restart fires (default 100). "
+                         "100 is a sensible HopperHop dividing line between 'climbing' and 'basin-locked'.")
+    ap.add_argument("--restart_max_attempts", type=int, default=3,
+                    help="Phase-ar: max restarts per seed (default 3). Each attempt is a fresh pi+q.")
+    ap.add_argument("--mpc_distill_coef", type=float, default=0.0,
+                    help="Phase-mpc-lite: coefficient for MPPI-gated actor distillation. "
+                         "Uses a small replay anchor batch and planner targets from the current model. 0 = off.")
+    ap.add_argument("--mpc_distill_anneal_steps", type=int, default=3_000_000,
+                    help="Phase-mpc-lite: linearly anneal distillation coef from its initial value to 0 "
+                         "over N env-steps after --expl_until. Default 3M.")
+    ap.add_argument("--mpc_distill_disable_gap", type=float, default=100.0,
+                    help="Phase-mpc-lite: disable distillation after an eval when pi - mppi >= gap. "
+                         "Re-enable automatically on a later eval if the gap drops back below this threshold.")
+    ap.add_argument("--mpc_distill_batch_size", type=int, default=16,
+                    help="Phase-mpc-lite: replay anchor batch size for planner targets per update cycle. "
+                         "Small on purpose to keep MPPI target generation bounded.")
     # Path P / Phase-P — cluster-entropy intrinsic reward (benchmark-fair, no env modification).
     ap.add_argument("--cluster_intrinsic_coef", type=float, default=0.0,
                     help="Path P: add coef * entropy(last W cluster ids) to training reward. Encourages "
@@ -1473,6 +1660,7 @@ def main():
         "lambda_se": args.glass_lambda_se,
         "lambda_balance": args.glass_lambda_balance,
         "lambda_temporal": args.glass_lambda_temporal,
+        "lambda_temp_stability": args.glass_lambda_temp_stability,
         "num_prototypes": args.glass_num_prototypes,
         "num_clusters": args.glass_num_clusters,
         "num_super_clusters": args.glass_num_super_clusters,
@@ -1526,6 +1714,14 @@ def main():
                         soft_stand_bonus=args.soft_stand_bonus,
                         soft_stand_floor=args.soft_stand_floor,
                         soft_anneal_steps=args.soft_anneal_steps,
+                        restart_on_plateau=args.restart_on_plateau,
+                        restart_check_at=args.restart_check_at,
+                        restart_threshold=args.restart_threshold,
+                        restart_max_attempts=args.restart_max_attempts,
+                        mpc_distill_coef=args.mpc_distill_coef,
+                        mpc_distill_anneal_steps=args.mpc_distill_anneal_steps,
+                        mpc_distill_disable_gap=args.mpc_distill_disable_gap,
+                        mpc_distill_batch_size=args.mpc_distill_batch_size,
                     )
                 elif algo in ("tdmpc-glass", "tdmpc_glass"):
                     q_reset = None
@@ -1565,6 +1761,14 @@ def main():
                         soft_stand_bonus=args.soft_stand_bonus,
                         soft_stand_floor=args.soft_stand_floor,
                         soft_anneal_steps=args.soft_anneal_steps,
+                        restart_on_plateau=args.restart_on_plateau,
+                        restart_check_at=args.restart_check_at,
+                        restart_threshold=args.restart_threshold,
+                        restart_max_attempts=args.restart_max_attempts,
+                        mpc_distill_coef=args.mpc_distill_coef,
+                        mpc_distill_anneal_steps=args.mpc_distill_anneal_steps,
+                        mpc_distill_disable_gap=args.mpc_distill_disable_gap,
+                        mpc_distill_batch_size=args.mpc_distill_batch_size,
                     )
                 else:
                     print(f"Unknown algo: {algo}", flush=True)
