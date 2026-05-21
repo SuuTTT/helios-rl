@@ -16,7 +16,10 @@ sync_box() {
   timeout 60 rsync -a -e "ssh -p $port -o StrictHostKeyChecking=no \
         -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
         -o BatchMode=yes" \
-        --include='HopperHop_*/' --include='HopperHop_*/**' \
+        --include='HopperHop_*/' \
+        --include='HopperHop_*/seed_*.csv' \
+        --include='HopperHop_*/seed_*_diag.csv' \
+        --include='HopperHop_*/**' \
         --exclude='**/checkpoints/**' --exclude='**/checkpoints' \
         --exclude='**/*.pkl' \
         root@$host:/root/helios-rl/exp/tdmpc_glass/ \

@@ -31,6 +31,73 @@ environment edits, and eval on original reward.
   500 and two seeds near the threshold, so compare Glass against a strengthened
   vanilla baseline before adding more Glass complexity.
 
+## Results to date (2026-05-20)
+
+### Phase-aa — K_UPDATE smoke sweep (vanilla TD-MPC2, NS=2048)
+
+3 seeds per K value. One seed per K was run as a check before expanding.
+
+| K_UPDATE | Seed | Box | Best MPPI | @ step | Status |
+|---|---|---|---|---|---|
+| 64 | 1 | ssh17637 | 233.7 | 3.25M | stopped (stuck) |
+| 128 | 1 | ssh6_4060 | **538.6** | 8.25M | **WINNER** |
+| 128 | 2 | ssh17637 | 284.9 | 4.25M | running |
+| 128 | 3 | ssh6_3080 | 307.1 | 9.5M | done |
+| 128 | 4 | ssh17637 | 209.2 | 4.25M | running |
+| 128 | 5 | ssh17637 | 331.2 | 6.75M | running |
+| 256 | 1 | ssh1_2080ti | **561.1** | 6.5M | **WINNER** |
+| 256 | 1 | ssh3_3060ti | **531.0** | 7.75M | **WINNER** (parallel run) |
+| 256 | 2 | local | 331.4 | 10M | done |
+| 256 | 3 | ssh6_3080 | 233.8 | 8.75M | done |
+
+**K=128 3-seed summary**: mean = (538.6 + 284.9 + 307.1) / 3 = **376.9**; G1 (>500) = **1/3**
+
+**K=256 3-seed summary**: mean = (561.1 + 331.4 + 233.8) / 3 = **375.4**; G1 (>500) = **1/3**
+
+**Verdict**: K=128 and K=256 have identical G1 winner rates in the 3-seed smoke. K=128 is cheaper
+(halved gradient FLOPs per env step) so Phase-ab uses K=128.
+
+K=64 (current default) looks clearly worse — one seed stuck at 233 confirms the training ratio
+hypothesis.
+
+### Phase-ab — K=128 vanilla 5-seed run (in progress)
+
+| Seed | Box | Best MPPI | @ step | Status |
+|---|---|---|---|---|
+| 1 | local | 248.5 | 7M | **stuck/regressing** |
+| 2 | ssh17637 | — | — | just started |
+| 3 | — | — | — | pending |
+| 4 | — | — | — | pending |
+| 5 | — | — | — | pending |
+
+Seed 1 behaviour diag at 7M: standing_rate=14.5%, falls=8.7/ep, ttf=674 steps — stuck in
+crawling gait, confirming a bad basin regardless of K.
+
+### Phase-1b — Glass baseline rerun (K=64, 10M cap)
+
+Reference to confirm TD-MPC-Glass behaviour at the old training ratio.
+
+| Seed | Box | Best MPPI | @ step | Status |
+|---|---|---|---|---|
+| 1 | local | 267.2 | 9.5M | done |
+| 2 | ssh6_4060 | 276.2 | 5M | running |
+| 3 | ssh3_3070 | **419.9** | 6M | running (best) |
+| 4 | ssh6_4060 | 232.3 | 4.25M | done |
+
+Phase-1b at K=64 shows the same stuck-seed pattern as vanilla TD-MPC2, with no winner yet across
+4 seeds. Seed-3 is the closest at 419.9 with healthy behaviour diag (standing 54.9%, ttf≈45 steps).
+
+### Key diag observations
+
+- **Winner signatures** (K=256 s1 @ 6.5M): standing_rate=95.7%, falls=0/ep, ttf=47 steps —
+  stable, continuous hopping.
+- **Stuck-seed signatures** (phase-ab s1 @ 7M): standing_rate=14.5%, falls=8.7/ep, ttf=674 —
+  crawling, never airborne.
+- **Approaching-winner** (phase-1b s3 @ 6M): standing_rate=54.9%, falls=11/ep, ttf=45 —
+  partial hopping, still inconsistent.
+
+The diag values are now surfaced live in the Run Inspector panel (Training Progress → Behaviour Diag).
+
 ## Implementation changes landed
 
 - `scripts/run_benchmark.py` accepts `--k_update` and leaves the default at 64.

@@ -71,6 +71,12 @@ RENDER_MEM_FRACTION = {
 RENDER_POLL_SECONDS = 30
 RENDER_DISPATCH_LOCK = threading.Lock()
 
+# Box probe cache — populated by api_boxes(), consumed by _compute_queue_etas().
+_BOX_CACHE: dict = {}
+_BOX_CACHE_LOCK = threading.Lock()
+
+SPS_RENDER_APPROX = 200  # rollout steps/sec for render ETA estimate
+
 # Keyed by CANONICAL phase name (after canonical_phase() normalization).
 PHASE_NOTES: dict[str, str] = {
     # Iter 1 baselines
@@ -483,6 +489,25 @@ def best_and_last(csv_path):
     return best, best_step, last, last_step
 
 
+def read_diag_last_mppi(diag_path: str) -> dict | None:
+    """Return the last mppi row of a _diag.csv as a dict, or None on any error."""
+    result = None
+    try:
+        with open(diag_path) as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get("eval_type") == "mppi":
+                    result = {
+                        "standing_rate": float(row.get("standing_rate", 0)),
+                        "fall_count": float(row.get("fall_count", 0)),
+                        "ttf": float(row.get("time_to_first_full", 1000)),
+                        "full_reward_rate": float(row.get("full_reward_rate", 0)),
+                    }
+    except Exception:
+        pass
+    return result
+
+
 def find_active_csv_for(box: str, seed: str):
     """Locate the per-box CSV for a given seed that's actively being written.
 
@@ -804,10 +829,13 @@ def api_boxes():
                 p["best_step"] = best_step if best_step >= 0 else None
                 p["last_mppi"] = round(last, 1) if last >= 0 else None
                 p["last_step"] = last_step if last_step >= 0 else None
+                diag_path = picked["path"].replace(".csv", "_diag.csv")
+                p["diag"] = read_diag_last_mppi(diag_path)
             else:
                 p["phase"] = None
                 p["best_mppi"] = p["last_mppi"] = None
                 p["best_step"] = p["last_step"] = None
+                p["diag"] = None
             # Approximate live SPS = last_step / (etime - JIT_warmup). Underestimates
             # at short runs while JIT dominates; settles to true sps by ~1M env steps.
             et = parse_etime_seconds(p.get("etime", ""))
@@ -823,6 +851,10 @@ def api_boxes():
     # active_keys = set of (phase, seed) tuples currently running anywhere
     active = sorted({(p["phase"], p["seed"]) for b in boxes for p in b.get("procs", [])
                     if p.get("phase") and p.get("seed")})
+    # Cache box data so ETA computation can use live SPS without a separate probe.
+    with _BOX_CACHE_LOCK:
+        for b in boxes:
+            _BOX_CACHE[b["tag"]] = b
     return jsonify({"boxes": boxes, "active": [{"phase": p, "seed": s} for p, s in active],
                     "ts": time.time()})
 
@@ -1134,7 +1166,42 @@ def _with_queue_lock(fn):
             fcntl.flock(lf, fcntl.LOCK_UN)
 
 
-DEFAULT_TASK_DURATION_S = 14400  # 4-hour fallback when no historical data
+DEFAULT_TASK_DURATION_S = 14400  # 4-hour fallback when no SPS or history
+
+# Max training steps and early-stop patience (in env steps).
+_MAX_STEPS = 10_000_000
+_PATIENCE_STEPS = 3_000_000
+
+
+def _sps_remaining_s(task: dict) -> float | None:
+    """Return remaining seconds for a running training task using cached SPS data.
+
+    Formula: remaining_steps = min(MAX, last + max(0, PATIENCE - (last-best))) - last
+    Falls back to None if no SPS data is available.
+    """
+    box_tag = task.get("box")
+    if not box_tag:
+        return None
+    with _BOX_CACHE_LOCK:
+        box_data = _BOX_CACHE.get(box_tag, {})
+    procs = box_data.get("procs", [])
+    if not procs:
+        return None
+    # Try to match by seed extracted from task env.
+    seed_m = re.search(r"SEEDS?=(\S+)", task.get("env", ""))
+    seed = seed_m.group(1) if seed_m else None
+    matched = [p for p in procs if seed and str(p.get("seed")) == seed]
+    proc = (matched or procs)[0]
+    sps = proc.get("sps_avg")
+    if not sps or sps <= 0:
+        return None
+    last_step = proc.get("last_step") or 0
+    best_step = proc.get("best_step") or 0
+    steps_since_best = max(0, last_step - best_step)
+    patience_left = max(0, _PATIENCE_STEPS - steps_since_best)
+    effective_target = min(_MAX_STEPS, last_step + patience_left)
+    remaining_steps = max(0, effective_target - last_step)
+    return remaining_steps / sps
 
 
 def _compute_queue_etas(tasks: list[dict]) -> tuple[list[dict], str | None]:
@@ -1155,7 +1222,7 @@ def _compute_queue_etas(tasks: list[dict]) -> tuple[list[dict], str | None]:
     def to_iso(dt: datetime) -> str:
         return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # Per-launcher average duration from done tasks with both timestamps.
+    # Per-launcher average duration from done tasks (fallback when no live SPS).
     launcher_durs: dict[str, list[float]] = {}
     for t in tasks:
         if t["status"] == "done" and t.get("started_at") and t.get("ended_at"):
@@ -1164,17 +1231,39 @@ def _compute_queue_etas(tasks: list[dict]) -> tuple[list[dict], str | None]:
                 launcher_durs.setdefault(t.get("launcher", ""), []).append((e - s).total_seconds())
     avg_dur: dict[str, float] = {l: sum(ds) / len(ds) for l, ds in launcher_durs.items()}
 
-    def est_dur(task) -> float:
+    def est_remaining_s(task) -> float:
+        """Estimate remaining seconds for a task (running or pending)."""
+        if task.get("type") == "render":
+            rp = task.get("render_params") or {}
+            total_s = (int(rp.get("n_episodes", 1)) * int(rp.get("episode_length", 250))
+                       / SPS_RENDER_APPROX)
+            if task.get("started_at"):
+                s = parse_iso(task["started_at"])
+                if s:
+                    return max(0.0, total_s - (now - s).total_seconds())
+            return total_s
+        # Try live SPS for running tasks.
+        if task["status"] == "running":
+            sps_rem = _sps_remaining_s(task)
+            if sps_rem is not None:
+                return sps_rem
         return avg_dur.get(task.get("launcher", ""), DEFAULT_TASK_DURATION_S)
 
-    # Box free-at times: running tasks → started_at + est_dur; idle boxes → now.
+    # Estimate total duration for scheduling pending tasks (use DEFAULT for pending).
+    def est_total_dur(task) -> float:
+        if task.get("type") == "render":
+            rp = task.get("render_params") or {}
+            return (int(rp.get("n_episodes", 1)) * int(rp.get("episode_length", 250))
+                    / SPS_RENDER_APPROX)
+        return avg_dur.get(task.get("launcher", ""), DEFAULT_TASK_DURATION_S)
+
+    # Box free-at times: running tasks → now + remaining; idle boxes → now.
     all_tags = [b[0] for b in BOXES]
     box_free: dict[str, datetime] = {tag: now for tag in all_tags}
     for t in tasks:
         if t["status"] == "running" and t.get("box") and t.get("started_at"):
-            s = parse_iso(t["started_at"])
-            if s:
-                box_free[t["box"]] = max(s + timedelta(seconds=est_dur(t)), now)
+            rem = est_remaining_s(t)
+            box_free[t["box"]] = max(now + timedelta(seconds=rem), now)
 
     # Simulate pending task scheduling with a min-heap of (free_time, box_tag).
     heap = [(ts, tag) for tag, ts in box_free.items()]
@@ -1189,7 +1278,7 @@ def _compute_queue_etas(tasks: list[dict]) -> tuple[list[dict], str | None]:
             break
         free_ts, tag = heapq.heappop(heap)
         start = max(free_ts, now)
-        finish = start + timedelta(seconds=est_dur(t))
+        finish = start + timedelta(seconds=est_total_dur(t))
         sched[t["id"]] = (start, finish)
         heapq.heappush(heap, (finish, tag))
 
@@ -1197,16 +1286,28 @@ def _compute_queue_etas(tasks: list[dict]) -> tuple[list[dict], str | None]:
     result = []
     for t in tasks:
         t = dict(t)
-        dur = est_dur(t)
-        t["estimated_duration_s"] = int(dur)
         if t["status"] == "running" and t.get("started_at"):
             s = parse_iso(t["started_at"])
             if s:
                 elapsed = (now - s).total_seconds()
-                eta = s + timedelta(seconds=dur)
+                rem = est_remaining_s(t)
+                eta = now + timedelta(seconds=rem)
                 t["elapsed_s"] = int(elapsed)
-                t["remaining_s"] = int(max(0, (eta - now).total_seconds()))
+                t["remaining_s"] = int(rem)
                 t["eta_iso"] = to_iso(eta)
+                # For SPS-based runs, also surface current step info for the UI.
+                box_tag = t.get("box", "")
+                with _BOX_CACHE_LOCK:
+                    box_data = _BOX_CACHE.get(box_tag, {})
+                procs = box_data.get("procs", [])
+                if procs:
+                    seed_m = re.search(r"SEEDS?=(\S+)", t.get("env", ""))
+                    seed = seed_m.group(1) if seed_m else None
+                    matched = [p for p in procs if seed and str(p.get("seed")) == seed]
+                    proc = (matched or procs)[0]
+                    t["_live_sps"] = proc.get("sps_avg")
+                    t["_live_last_step"] = proc.get("last_step")
+                    t["_live_best_reward"] = proc.get("best_mppi")
         elif t["status"] == "pending" and t["id"] in sched:
             start, finish = sched[t["id"]]
             t["estimated_start_iso"] = to_iso(start)
@@ -1299,6 +1400,38 @@ def api_queue_retry(task_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/queue/<task_id>/log")
+def api_queue_task_log(task_id):
+    """Return last 60 lines of the task's remote log (/tmp/fleet_<id>.log)."""
+    tasks = _load_central_queue()
+    task = next((t for t in tasks if t["id"] == task_id), None)
+    if not task:
+        return jsonify({"error": "task not found"}), 404
+    box_tag = task.get("box")
+    log_path = f"/tmp/fleet_{task_id}.log"
+    box_info = next((b for b in BOXES if b[0] == box_tag), None)
+    try:
+        if box_tag == "local":
+            r = subprocess.run(["tail", "-n", "60", log_path],
+                               capture_output=True, text=True, timeout=5)
+            lines = r.stdout.splitlines()
+        elif box_info:
+            tag, port, host, gpu_idx, label = box_info
+            r = subprocess.run(
+                ["ssh", "-p", str(port), "-i", SSH_KEY,
+                 "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=8",
+                 "-o", "BatchMode=yes", f"root@{host}",
+                 f"tail -n 60 {log_path} 2>/dev/null || echo '(log not found at {log_path})'"],
+                capture_output=True, text=True, timeout=15,
+            )
+            lines = r.stdout.splitlines()
+        else:
+            lines = [f"(box '{box_tag}' not in registry)"]
+    except Exception as e:
+        lines = [f"(error fetching log: {e})"]
+    return jsonify({"lines": lines, "log_path": log_path, "box": box_tag})
+
+
 @app.route("/api/queue/render", methods=["POST"])
 def api_queue_render_add():
     """Add a render task to the central queue (type=render, priority=1).
@@ -1350,6 +1483,15 @@ def api_queue_render_add():
 def _render_queue_worker():
     """Background thread: claims pending render tasks from central_queue and runs them locally."""
     from datetime import datetime, timezone
+    # On startup reset any render tasks stuck as "running" (orphaned from a previous dashboard run).
+    def _reset_stuck_renders(tasks):
+        for t in tasks:
+            if t.get("type") == "render" and t["status"] == "running":
+                t["status"] = "pending"
+                t["box"] = None
+                t["started_at"] = None
+        return tasks
+    _with_queue_lock(_reset_stuck_renders)
     while True:
         time.sleep(10)
         try:
@@ -1467,6 +1609,23 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .sortable-th{cursor:pointer;user-select:none}
   .sortable-th:hover{color:var(--accent)}
   .filter-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+  /* Run Inspector */
+  .ri-card{background:#1b1f2a;border:1px solid var(--line);border-radius:5px;margin-bottom:8px;overflow:hidden}
+  .ri-header{display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;user-select:none}
+  .ri-header:hover{background:#222a3b}
+  .ri-title{font-weight:600;flex:1}
+  .ri-meta{font-size:11px;color:var(--muted)}
+  .ri-body{padding:10px 14px;border-top:1px solid var(--line);display:none}
+  .ri-body.open{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  .ri-section-title{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:5px;font-weight:600}
+  .ri-row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;border-bottom:1px solid #1e2535}
+  .ri-key{color:var(--muted)}
+  .ri-val{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;text-align:right;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ri-log{background:#0e0f12;border:1px solid var(--line);border-radius:3px;padding:6px 8px;font-size:10px;font-family:ui-monospace,monospace;max-height:120px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px;line-height:1.4}
+  .ri-span-full{grid-column:1/-1}
+  .ri-path{color:#64b5f6;font-size:11px;font-family:ui-monospace,monospace;word-break:break-all}
+  .ri-chevron{transition:transform .15s;font-size:14px;color:var(--muted)}
+  .ri-chevron.open{transform:rotate(90deg)}
 </style></head><body>
 <header>
   <h1>TD-MPC-Glass Live Dashboard</h1>
@@ -1509,6 +1668,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <tr><th style="width:50px">Pri</th><th>Label</th><th style="width:80px">Status</th><th style="width:90px">Box</th><th style="width:170px">ETA / Progress</th><th style="width:90px">Actions</th></tr>
   </thead><tbody></tbody></table>
   <div id="queue-empty" class="small" style="display:none;padding:6px;color:var(--muted)">Queue is empty.</div>
+  </section>
+
+  <section id="run-inspector-section"><h2>Run Inspector
+    <button class="refresh-btn" onclick="loadRunInspector()">&#x21bb; refresh</button>
+    <span class="small" id="ri-count" style="opacity:.65;font-weight:normal;margin-left:6px"></span>
+  </h2>
+  <div id="run-inspector-cards"></div>
   </section>
 
   <section><h2>Learning Curves <span class="small" id="curves-count"></span>
@@ -1560,51 +1726,6 @@ function fmtMppi(v){
   return `<span class="mono ${cls}">${v.toFixed ? v.toFixed(1) : v}</span>`;
 }
 function fmtStep(s){ if (s==null) return ''; return `<span class="small">@${(s/1e6).toFixed(2)}M</span>`; }
-
-function loadBoxes(){
-  fetch('/api/boxes').then(r=>r.json()).then(j=>{
-    $('#ts').textContent = new Date(j.ts*1000).toLocaleTimeString();
-    ACTIVE_KEYS = new Set((j.active||[]).map(a=>`${a.phase}|${a.seed}`));
-    const tbody = $('#boxes tbody'); tbody.innerHTML = '';
-    j.boxes.forEach(b=>{
-      const tr = document.createElement('tr');
-      const ok = b.reachable;
-      const gpuUtil = b.gpu_util ?? null;
-      const memPct = b.mem_total ? (b.mem_used/b.mem_total*100) : null;
-      const hotG = gpuUtil!=null && gpuUtil>=90;
-      const hotM = memPct!=null && memPct>=80;
-      // Find matching running queue task for this box.
-      const queueTask = LAST_QUEUE_TASKS.find(t => t.status === 'running' && t.box === b.tag);
-      const queueEtaHtml = queueTask && queueTask.eta_iso
-        ? `<div class="small" style="color:#64b5f6;margin-top:2px">⏱ ${fmtDur(queueTask.elapsed_s)} · done ${fmtEta(queueTask.eta_iso, false)} <span style="opacity:.5">${queueTask.label}</span></div>`
-        : '';
-      const procHTML = (b.procs||[]).map(p=>{
-        const tag = (p.tag||'').split('+').filter(Boolean).map(t=>`<span class="chip ${t}">${t}</span>`).join('');
-        const phaseStr = p.phase ? `<b>${p.phase}</b>` : '<span class="small">(no csv yet)</span>';
-        const dupChip = (p.dup_count && p.dup_count > 1) ? `<span class="chip" style="background:#54391c;color:#e0a44c" title="more than one process found for this seed+phase — likely zombie">${p.dup_count}× DUP</span>` : '';
-        return `<div class="mono" style="line-height:1.5">
-          ${phaseStr} · s${p.seed} · best ${fmtMppi(p.best_mppi)}${fmtStep(p.best_step)} · last ${fmtMppi(p.last_mppi)}${fmtStep(p.last_step)} ${dupChip}
-          <div class="small" style="opacity:.7">PID ${p.pid} · ${p.etime} · ${p.algo} NS=${p.ns} ${tag}</div>
-        </div>`;
-      }).join('') || '<span class="small">(idle)</span>';
-      // SPS: take max across procs (mostly there's one), or '—' if none reported
-      const spsVals = (b.procs||[]).map(p=>p.sps_avg).filter(v=>v!=null);
-      const sps = spsVals.length ? Math.max(...spsVals) : null;
-      tr.innerHTML = `
-        <td class="mono ${ok?'':'box-bad'}">${b.tag}</td>
-        <td>${b.label}${ok?'':'<span class="small box-bad"> · unreachable</span>'}</td>
-        <td>${gpuUtil==null?'—':`<span class="util-bar ${hotG?'hot':''}"><span style="width:${gpuUtil}%"></span></span>${gpuUtil}%`}</td>
-        <td>${memPct==null?'—':`<span class="util-bar ${hotM?'hot':''}"><span style="width:${memPct}%"></span></span>${b.mem_used}/${b.mem_total} MiB`}</td>
-        <td>${b.cpu_util==null?'—':b.cpu_util+'%'}</td>
-        <td class="mono">${sps==null?'<span class="small">—</span>':sps+'/s'}</td>
-        <td>${procHTML}${queueEtaHtml}</td>
-      `;
-      tbody.appendChild(tr);
-    });
-    // re-render curves if the running-only filter is active
-    if ($('#only-running') && $('#only-running').checked) loadCurves();
-  });
-}
 
 // ── Phase browser + CI mode ────────────────────────────────────────────
 let PHASE_DATA = [];
@@ -2037,6 +2158,7 @@ function fmtEta(isoStr, short) {
 function loadQueue(){
   fetch('/api/queue').then(r=>r.json()).then(j=>{
     LAST_QUEUE_TASKS = j.tasks || [];
+    loadRunInspector();
     // Update queue-level ETA in section header
     const hdr = document.getElementById('queue-eta-hdr');
     if (hdr) {
@@ -2136,6 +2258,203 @@ function movePriority(id, delta){
 }
 function retryTask(id){
   fetch('/api/queue/'+id+'/retry', {method:'POST'}).then(()=>loadQueue());
+}
+
+// ── Run Inspector ─────────────────────────────────────────────────────────
+const RI_OPEN = new Set();       // task ids with expanded card
+const RI_LOG_CACHE = {};         // task_id → {lines, loaded}
+const LAST_BOX_DATA = {};        // tag → box entry (updated by loadBoxes)
+
+function loadBoxes(){
+  fetch('/api/boxes').then(r=>r.json()).then(j=>{
+    $('#ts').textContent = new Date(j.ts*1000).toLocaleTimeString();
+    ACTIVE_KEYS = new Set((j.active||[]).map(a=>`${a.phase}|${a.seed}`));
+    j.boxes.forEach(b => { LAST_BOX_DATA[b.tag] = b; });
+    const tbody = $('#boxes tbody'); tbody.innerHTML = '';
+    j.boxes.forEach(b=>{
+      const tr = document.createElement('tr');
+      const ok = b.reachable;
+      const gpuUtil = b.gpu_util ?? null;
+      const memPct = b.mem_total ? (b.mem_used/b.mem_total*100) : null;
+      const hotG = gpuUtil!=null && gpuUtil>=90;
+      const hotM = memPct!=null && memPct>=80;
+      const queueTask = LAST_QUEUE_TASKS.find(t => t.status === 'running' && t.box === b.tag);
+      const queueEtaHtml = queueTask && queueTask.eta_iso
+        ? `<div class="small" style="color:#64b5f6;margin-top:2px">⏱ ${fmtDur(queueTask.elapsed_s)} · done ${fmtEta(queueTask.eta_iso, false)} <span style="opacity:.5">${queueTask.label}</span></div>`
+        : '';
+      const procHTML = (b.procs||[]).map(p=>{
+        const tag = (p.tag||'').split('+').filter(Boolean).map(t=>`<span class="chip ${t}">${t}</span>`).join('');
+        const phaseStr = p.phase ? `<b>${p.phase}</b>` : '<span class="small">(no csv yet)</span>';
+        const dupChip = (p.dup_count && p.dup_count > 1) ? `<span class="chip" style="background:#54391c;color:#e0a44c" title="more than one process found for this seed+phase — likely zombie">${p.dup_count}× DUP</span>` : '';
+        return `<div class="mono" style="line-height:1.5">
+          ${phaseStr} · s${p.seed} · best ${fmtMppi(p.best_mppi)}${fmtStep(p.best_step)} · last ${fmtMppi(p.last_mppi)}${fmtStep(p.last_step)} ${dupChip}
+          <div class="small" style="opacity:.7">PID ${p.pid} · ${p.etime} · ${p.algo} NS=${p.ns} ${tag}</div>
+        </div>`;
+      }).join('') || '<span class="small">(idle)</span>';
+      const spsVals = (b.procs||[]).map(p=>p.sps_avg).filter(v=>v!=null);
+      const sps = spsVals.length ? Math.max(...spsVals) : null;
+      tr.innerHTML = `
+        <td class="mono ${ok?'':'box-bad'}">${b.tag}</td>
+        <td>${b.label}${ok?'':'<span class="small box-bad"> · unreachable</span>'}</td>
+        <td>${gpuUtil==null?'—':`<span class="util-bar ${hotG?'hot':''}"><span style="width:${gpuUtil}%"></span></span>${gpuUtil}%`}</td>
+        <td>${memPct==null?'—':`<span class="util-bar ${hotM?'hot':''}"><span style="width:${memPct}%"></span></span>${b.mem_used}/${b.mem_total} MiB`}</td>
+        <td>${b.cpu_util==null?'—':b.cpu_util+'%'}</td>
+        <td class="mono">${sps==null?'<span class="small">—</span>':sps+'/s'}</td>
+        <td>${procHTML}${queueEtaHtml}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+    if ($('#only-running') && $('#only-running').checked) loadCurves();
+    loadRunInspector();
+  });
+}
+
+function riCardHtml(task) {
+  const box = LAST_BOX_DATA[task.box] || {};
+  const procs = (box.procs || []);
+  // Try to match proc by seed.
+  const seedM = (task.env||'').match(/SEEDS?=(\S+)/);
+  const taskSeed = seedM ? seedM[1] : null;
+  const matchedProcs = taskSeed ? procs.filter(p=>String(p.seed)===taskSeed) : [];
+  const proc = matchedProcs[0] || procs[0] || null;
+
+  // System section
+  const gpuUtil = box.gpu_util != null ? `${box.gpu_util}%` : '—';
+  const memStr = box.mem_total ? `${box.mem_used}/${box.mem_total} MiB` : '—';
+  const cpuUtil = box.cpu_util != null ? `${box.cpu_util}%` : '—';
+  const reachable = box.reachable != null ? (box.reachable ? 'yes' : 'no') : '—';
+  const runtime = task.started_at ? fmtDur(task.elapsed_s) : '—';
+
+  // Training section
+  const sps = proc ? (proc.sps_avg != null ? proc.sps_avg + '/s' : '—') : '—';
+  const lastStep = proc && proc.last_step != null ? (proc.last_step/1e6).toFixed(2)+'M' : '—';
+  const bestMppi = proc && proc.best_mppi != null ? proc.best_mppi.toFixed(1) : '—';
+  const bestStep = proc && proc.best_step != null ? (proc.best_step/1e6).toFixed(2)+'M' : '—';
+  const lastMppi = proc && proc.last_mppi != null ? proc.last_mppi.toFixed(1) : '—';
+
+  // Patience remaining (from live SPS data)
+  let patienceHtml = '—';
+  if (proc && proc.last_step != null && proc.best_step != null) {
+    const stepsSinceBest = Math.max(0, proc.last_step - proc.best_step);
+    const patienceLeft = Math.max(0, 3000000 - stepsSinceBest);
+    const patiencePct = Math.round((1 - patienceLeft/3000000)*100);
+    const patienceM = (patienceLeft/1e6).toFixed(1);
+    const col = patienceLeft < 500000 ? 'var(--bad)' : (patienceLeft < 1500000 ? 'var(--warn)' : 'var(--good)');
+    patienceHtml = `<span style="color:${col}">${patienceM}M left</span>`;
+  }
+
+  // Diag section (from _diag.csv last mppi row)
+  const diag = proc ? (proc.diag || null) : null;
+  const standPct = diag ? (diag.standing_rate * 100).toFixed(1) + '%' : '—';
+  const fallsPerEp = diag ? diag.fall_count.toFixed(1) + '/ep' : '—';
+  const ttfSteps = diag ? diag.ttf.toFixed(0) + ' steps' : '—';
+  const fullRateStr = diag ? (diag.full_reward_rate * 100).toFixed(1) + '%' : '—';
+  // Color-code standing rate: <20% bad, 20-50% warn, >50% good
+  const standCol = diag
+    ? (diag.standing_rate < 0.20 ? 'var(--bad)' : diag.standing_rate < 0.50 ? 'var(--warn)' : 'var(--good)')
+    : '';
+
+  // ETA
+  const etaStr = task.eta_iso ? fmtEta(task.eta_iso, false) : '—';
+
+  // Artifacts section
+  const envDisplay = (task.env||'').trim() || '(none)';
+  const cmd = `${envDisplay} bash ${task.launcher||''}`;
+  const logPath = `/tmp/fleet_${task.id}.log (on ${task.box||'?'})`;
+  // Guess output dir from seed + output_tag (from proc if available)
+  const outputTag = proc ? (proc.output_tag||'') : '';
+  const seedStr = taskSeed || (proc ? proc.seed : '?');
+  const outputDir = outputTag ? `exp/tdmpc_glass/HopperHop_${outputTag}/seed_${seedStr}/` : '—';
+  const ckptPath = outputTag ? `${outputDir}checkpoints/best_mppi.pkl` : '—';
+
+  const isOpen = RI_OPEN.has(task.id);
+  return `
+  <div class="ri-card" id="ri-${task.id}">
+    <div class="ri-header" onclick="toggleRI('${task.id}')">
+      <span class="ri-chevron ${isOpen?'open':''}">▶</span>
+      <span class="ri-title">${task.label}</span>
+      <span class="ri-meta">${task.box||'?'} · elapsed ${runtime} · ETA ${etaStr}</span>
+      <span class="pill ${task.status==='running'?'green':'gray'}">${task.status}</span>
+    </div>
+    <div class="ri-body ${isOpen?'open':''}" id="ri-body-${task.id}">
+      <div>
+        <div class="ri-section-title">System (${task.box||'?'})</div>
+        <div class="ri-row"><span class="ri-key">GPU util</span><span class="ri-val">${gpuUtil}</span></div>
+        <div class="ri-row"><span class="ri-key">GPU mem</span><span class="ri-val">${memStr}</span></div>
+        <div class="ri-row"><span class="ri-key">CPU util</span><span class="ri-val">${cpuUtil}</span></div>
+        <div class="ri-row"><span class="ri-key">Reachable</span><span class="ri-val">${reachable}</span></div>
+        <div class="ri-row"><span class="ri-key">Runtime</span><span class="ri-val">${runtime}</span></div>
+      </div>
+      <div>
+        <div class="ri-section-title">Training Progress</div>
+        <div class="ri-row"><span class="ri-key">SPS</span><span class="ri-val">${sps}</span></div>
+        <div class="ri-row"><span class="ri-key">Last step</span><span class="ri-val">${lastStep}</span></div>
+        <div class="ri-row"><span class="ri-key">Last MPPI</span><span class="ri-val">${lastMppi}</span></div>
+        <div class="ri-row"><span class="ri-key">Best MPPI</span><span class="ri-val box-good">${bestMppi}</span></div>
+        <div class="ri-row"><span class="ri-key">Best @step</span><span class="ri-val">${bestStep}</span></div>
+        <div class="ri-row"><span class="ri-key">Patience left</span><span class="ri-val">${patienceHtml}</span></div>
+        <div class="ri-row"><span class="ri-key">ETA</span><span class="ri-val">${etaStr}</span></div>
+        <div class="ri-section-title" style="margin-top:8px">Behaviour Diag (last eval)</div>
+        <div class="ri-row"><span class="ri-key">Standing rate</span><span class="ri-val" style="color:${standCol}">${standPct}</span></div>
+        <div class="ri-row"><span class="ri-key">Falls/ep</span><span class="ri-val">${fallsPerEp}</span></div>
+        <div class="ri-row"><span class="ri-key">Time-to-hop</span><span class="ri-val">${ttfSteps}</span></div>
+        <div class="ri-row"><span class="ri-key">Full-rew rate</span><span class="ri-val">${fullRateStr}</span></div>
+      </div>
+      <div>
+        <div class="ri-section-title">Artifacts</div>
+        <div class="ri-row"><span class="ri-key">Command</span></div>
+        <div class="ri-path" style="margin-bottom:4px;font-size:10px">${cmd}</div>
+        <div class="ri-row"><span class="ri-key">Log path</span></div>
+        <div class="ri-path">${logPath}</div>
+        <div class="ri-row" style="margin-top:4px"><span class="ri-key">Output dir</span></div>
+        <div class="ri-path">${outputDir}</div>
+        <div class="ri-row" style="margin-top:4px"><span class="ri-key">Checkpoint</span></div>
+        <div class="ri-path">${ckptPath}</div>
+        <button class="refresh-btn" onclick="loadRILog('${task.id}')" style="margin-top:8px">📋 tail log</button>
+      </div>
+      <div class="ri-span-full" id="ri-log-${task.id}" style="display:${RI_LOG_CACHE[task.id]?'':'none'}">
+        <div class="ri-section-title">Log tail</div>
+        <div class="ri-log" id="ri-loglines-${task.id}">${(RI_LOG_CACHE[task.id]||[]).join('\n')}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function loadRunInspector() {
+  const tasks = LAST_QUEUE_TASKS.filter(t => t.status === 'running');
+  const container = document.getElementById('run-inspector-cards');
+  const count = document.getElementById('ri-count');
+  if (!container) return;
+  if (!tasks.length) {
+    container.innerHTML = '<div class="small" style="color:var(--muted);padding:4px">No running tasks.</div>';
+    if (count) count.textContent = '';
+    return;
+  }
+  if (count) count.textContent = `(${tasks.length} running)`;
+  container.innerHTML = tasks.map(riCardHtml).join('');
+}
+
+function toggleRI(id) {
+  const body = document.getElementById('ri-body-'+id);
+  const chevron = document.querySelector(`#ri-${id} .ri-chevron`);
+  if (!body) return;
+  const isOpen = body.classList.contains('open');
+  if (isOpen) { body.classList.remove('open'); chevron.classList.remove('open'); RI_OPEN.delete(id); }
+  else { body.classList.add('open'); chevron.classList.add('open'); RI_OPEN.add(id); }
+}
+
+function loadRILog(taskId) {
+  const logDiv = document.getElementById('ri-log-'+taskId);
+  const logLines = document.getElementById('ri-loglines-'+taskId);
+  if (!logDiv || !logLines) return;
+  logDiv.style.display = '';
+  logLines.textContent = 'loading…';
+  fetch('/api/queue/'+taskId+'/log').then(r=>r.json()).then(j=>{
+    const lines = j.lines || ['(empty)'];
+    RI_LOG_CACHE[taskId] = lines;
+    logLines.textContent = lines.join('\n');
+    logLines.scrollTop = logLines.scrollHeight;
+  }).catch(()=>{ logLines.textContent = '(fetch error)'; });
 }
 
 // initial + periodic refresh

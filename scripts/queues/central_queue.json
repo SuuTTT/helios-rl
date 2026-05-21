@@ -29,11 +29,11 @@
     "launcher": "scripts/run_phase1b_10m.sh",
     "env": "SEEDS=3 XLA_PYTHON_CLIENT_MEM_FRACTION=0.65",
     "priority": 10,
-    "status": "running",
+    "status": "done",
     "box": "ssh3_3070",
     "created_at": "2026-05-20T08:35:00Z",
     "started_at": "2026-05-20T18:27:55Z",
-    "ended_at": null
+    "ended_at": "2026-05-21T00:08:44Z"
   },
   {
     "id": "t0000006",
@@ -77,10 +77,10 @@
     "launcher": "scripts/run_phaseab_codex_tdmpc2_5seed.sh",
     "env": "SEEDS=3 K_UPDATE=128 XLA_PYTHON_CLIENT_MEM_FRACTION=0.65",
     "priority": 12,
-    "status": "pending",
-    "box": null,
+    "status": "running",
+    "box": "ssh17637_gpu1",
     "created_at": "2026-05-20T14:00:00Z",
-    "started_at": null,
+    "started_at": "2026-05-21T00:04:49Z",
     "ended_at": null
   },
   {
@@ -89,10 +89,10 @@
     "launcher": "scripts/run_phaseac_codex_glass_5seed.sh",
     "env": "SEEDS=1 K_UPDATE=128 XLA_PYTHON_CLIENT_MEM_FRACTION=0.75",
     "priority": 14,
-    "status": "pending",
-    "box": null,
+    "status": "running",
+    "box": "ssh3_3070",
     "created_at": "2026-05-20T14:00:00Z",
-    "started_at": null,
+    "started_at": "2026-05-21T00:08:44Z",
     "ended_at": null
   },
   {
@@ -135,10 +135,10 @@
       "seed": "1"
     },
     "priority": 1,
-    "status": "running",
+    "status": "failed",
     "box": "local_render",
     "created_at": "2026-05-20T22:56:27Z",
-    "started_at": "2026-05-20T22:56:28Z",
-    "ended_at": null
+    "started_at": "2026-05-20T23:57:09Z",
+    "ended_at": "2026-05-21T00:09:08Z"
   }
 ]
