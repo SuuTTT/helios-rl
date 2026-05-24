@@ -11,9 +11,10 @@ helios-rl GPU fleet. Written for teammates who are new to the stack.
 central_queue.json          ← the task ledger (plain JSON)
          │
          ▼
-iter6_auto_queue.sh         ← daemon: claims idle boxes, SSH-launches tasks
+scripts/task_queue_daemon.py ← daemon: claims idle boxes, syncs code, launches tasks
          │
          ├──► remote box: nohup bash <launcher>.sh (writes seed_N.csv + _diag.csv)
+         ├──► local box: subprocess bash <launcher>.sh (same task/log contract)
          │
 iter5_stream_remotes.sh     ← daemon: rsync mirror every 5 min → remote_mirror/<box>/
          │
@@ -67,6 +68,11 @@ The `run_benchmark.py` launcher scripts set these automatically.
 | `ssh3_3070` | `ssh3.vast.ai:15229` | 3070 | 8 GB | 0.75 | |
 | `ssh6_3080` | `ssh6.vast.ai:16779` | 3080 | 10 GB | 0.75 | |
 | `ssh3_3060ti` | `ssh3.vast.ai:11271` | 3060 Ti | 8 GB | 0.65 | |
+| `ssh4_8080` | `ssh4.vast.ai:15665` | 2060 | 12 GB | 0.65 | active; `/root/venv` uses JAX CUDA 13 on driver 580.126.09; daemon injects low-thread XLA env because `pids.max=256`; connect with `ssh -p 15665 root@ssh4.vast.ai -L 8080:localhost:8080` |
+| `ssh9_2060_gpu0` | `ssh9.vast.ai:17647` | 2060 (slot 0) | 6 GB | 0.35 | 4-GPU box |
+| `ssh9_2060_gpu1` | `ssh9.vast.ai:17647` | 2060 (slot 1) | 6 GB | 0.35 | 4-GPU box |
+| `ssh9_2060_gpu2` | `ssh9.vast.ai:17647` | 2060 (slot 2) | 6 GB | 0.35 | 4-GPU box |
+| `ssh9_2060_gpu3` | `ssh9.vast.ai:17647` | 2060 (slot 3) | 6 GB | 0.35 | 4-GPU box |
 
 **Tip**: the dashboard Box Fleet section shows live GPU%, mem, CPU%, running seed,
 best MPPI, ETA. Check there before SSHing.
@@ -82,8 +88,8 @@ pgrep -fa web_dashboard.py         # should print a PID + path
 # Remote mirror sync
 pgrep -fa iter5_stream_remotes.sh
 
-# Auto-queue daemon
-pgrep -fa iter6_auto_queue.sh
+# Central queue daemon
+pgrep -fa task_queue_daemon.py
 ```
 
 If any are dead, see section 8 (Restart playbook).
@@ -104,7 +110,7 @@ Open the dashboard: **http://localhost:5055**
    - **Priority**: lower number = higher priority. Default 10. Use 5 for urgent runs.
 3. Click **Add**. The task appears as `pending`.
 
-The auto-queue daemon picks it up within 5 minutes when a box is free.
+The central queue daemon picks it up within about 60 seconds when a box is free.
 
 ### Path B — via curl (scriptable)
 
@@ -147,6 +153,20 @@ pending → (daemon: box goes idle) → running → done
 To retry a failed/done task: Task Queue → click **retry** on the task row.
 To bump priority: use the ▲/▼ arrows on the task row.
 To cancel: click **×**.
+
+### Auto-promotion discipline
+
+The queue daemon auto-checks finished `scripts/run_phasei9_glass_probe.sh`
+single-seed tasks with parseable eval rows:
+
+- `best_any > 380`: append one more seed from the same recipe.
+- `best_any > 500`: append two more seeds from the same recipe.
+- `best_any > 600`: append five more seeds from the same recipe.
+- If the run fails from an infrastructure-fixable interruption but has eval
+  rows, lower the trigger bars by 100 (`>280`, `>400`, `>500`).
+
+The daemon records `auto_promoted` metadata on the completed task so a restart
+does not duplicate the generated follow-up seeds.
 
 ---
 
@@ -192,7 +212,6 @@ for seed in $SEEDS; do
     --k_update 128 \
     --mppi_n_samples 2048 \
     --early_stop_patience 3000000 \
-    --save_full_state \
     --no_plot 2>&1 | tee -a "$log"
 done
 ```
@@ -205,7 +224,12 @@ done
   overwrite each other.
 - **`tee -a`** (append) not `tee` — so a restart doesn't truncate the log.
 - **`--no_plot`** — always. Remote boxes have no display.
-- **`--save_full_state`** — recommended for long runs so a crashed box can resume.
+- **`--save_full_state`** — default off for queue sweeps. Full-state checkpoints
+  can grow to around 1 GB after replay/env state fills, so enable it only for a
+  specific resume/debug run with enough disk headroom.
+- **Code sync** — remote queue launches sync both `scripts/` and `src/` before
+  starting. After changing daemon sync/launch behavior, restart
+  `scripts/task_queue_daemon.py`.
 
 ---
 
@@ -224,7 +248,7 @@ done
 | `--latent_smooth_warmup_env_steps` | 0 | steps before smoothing kicks in |
 | `--early_stop_patience` | 0 (off) | stop N steps after best MPPI; 3M recommended |
 | `--resume_checkpoint` | — | path to `*.pkl`; full resume needs `*_full.pkl` |
-| `--save_full_state` | false | saves replay buffer + env state for exact resume |
+| `--save_full_state` | false | saves replay buffer + env state for exact resume; avoid by default in queue sweeps due disk cost |
 | `--glass_*` | various | Glass-specific knobs (see `--help`) |
 
 ---
@@ -259,7 +283,7 @@ coded: green > 1.5M, yellow 0.5–1.5M, red < 0.5M), ETA.
 - `full-rew rate` — fraction of steps earning the full reward.
 
 **Artifacts** — full launch command, log path, output dir, checkpoint path. The
-**tail log** button fetches the last 60 lines from `/tmp/fleet_<id>.log` on the
+**tail log** button fetches the last 60 lines from `/tmp/tqd_<id>.log` on the
 remote box.
 
 ### Learning Curves panel
@@ -289,7 +313,10 @@ exp/tdmpc_glass/
     seed_N_diag.csv             ← step,eval_type,seed,full_reward_rate,standing_rate,fall_count,time_to_first_full
     seed_N/checkpoints/
       best_mppi.pkl             ← model weights at best MPPI
-      latest_full.pkl           ← full state for exact resume (with --save_full_state)
+      best_pi.pkl               ← model weights at best deterministic actor eval
+      best_any.pkl              ← best of pi or MPPI
+      latest_eval.pkl           ← latest eval checkpoint
+      latest_full.pkl           ← full state for exact resume (only with --save_full_state)
   remote_mirror/<box>/          ← rsync'd copies of remote runs (updated every 5 min)
     HopperHop_<TAG>/seed_N.csv
   rollout_videos/<job_id>.mp4   ← dashboard-triggered render outputs
@@ -333,9 +360,9 @@ If any daemon died:
 nohup setsid /root/helios-rl/scripts/iter5_stream_remotes.sh \
   > /root/helios-rl/exp/tdmpc_glass/logs/daemons/stream.log 2>&1 < /dev/null & disown
 
-# 2. Auto-queue (poll boxes every 5 min, launch next pending task)
-nohup setsid /root/helios-rl/scripts/iter6_auto_queue.sh \
-  > /root/helios-rl/exp/tdmpc_glass/logs/daemons/autoqueue.log 2>&1 < /dev/null & disown
+# 2. Central queue (poll boxes every 60s, launch next pending task)
+nohup setsid /root/venv/bin/python3 /root/helios-rl/scripts/task_queue_daemon.py \
+  >> /root/helios-rl/exp/tdmpc_glass/logs/daemons/tqd.log 2>&1 < /dev/null & disown
 
 # 3. Web dashboard
 nohup setsid /root/venv/bin/python3 -u /root/helios-rl/scripts/web_dashboard.py \
@@ -347,7 +374,7 @@ All three survive session close (PPID=1). Verify: `ps -o pid,ppid,cmd <PID>`.
 Logs:
 ```
 /root/helios-rl/exp/tdmpc_glass/logs/daemons/stream.log
-/root/helios-rl/exp/tdmpc_glass/logs/daemons/autoqueue.log
+/root/helios-rl/exp/tdmpc_glass/logs/daemons/tqd.log
 /tmp/web_dashboard.log
 ```
 
@@ -358,9 +385,14 @@ Logs:
 | Symptom | Cause | Fix |
 |---|---|---|
 | Box shows `best —` / `last —` | Mirror outdated or run hasn't done first eval (~250k steps) | `pgrep -fa iter5_stream_remotes`; restart if dead. Otherwise just wait. |
-| Box marked "unreachable" | SSH timeout / vast.ai box rebooted | `ssh -p <port> root@<host> echo ok` to confirm. If gone, comment box row in `BOXES` in `web_dashboard.py` and in `iter6_auto_queue.sh`. |
+| Box marked "unreachable" | SSH timeout / vast.ai box rebooted | `ssh -p <port> root@<host> echo ok` to confirm. If gone, comment box row in `BOXES` in `web_dashboard.py` and `task_queue_daemon.py`. |
 | Task stuck as "running" after dashboard restart | Orphaned task — render tasks are auto-reset on startup; training tasks need a manual retry | Click **retry** in Task Queue. |
-| Auto-queue keeps re-launching same seed | Launcher exits non-zero before GPU warms up, box still probes as idle | Check `/root/helios-rl/exp/tdmpc_glass/logs/daemons/autoqueue.log` and the box's `/tmp/fleet_<id>.log` |
+| Queue keeps re-launching same seed | Launcher exits non-zero before GPU warms up, box still probes as idle | Check `/root/helios-rl/exp/tdmpc_glass/logs/daemons/tqd.log` and the box's `/tmp/tqd_<id>.log` |
+| Remote task fails with `unexpected keyword argument` after code changes | Remote `src/` is stale or daemon sync logic was not restarted | Restart `task_queue_daemon.py`; verify it syncs both `scripts/` and `src/`. |
+| Local queued task immediately becomes done with stale log | Old `/tmp/tqd_<id>.log` ownership or local launcher issue | Remove stale `/tmp/tqd_<id>.log`, restart `task_queue_daemon.py`, then retry the task. |
+| Task is `done` after 1-5 min with no eval rows | Launcher/JIT failed before first eval, or box disappeared before logs were mirrored | Tail `/tmp/tqd_<id>.log`; if CSV has only the header, retry the task. Current daemon marks future nonzero launcher statuses as `failed` instead of `done`. |
+| PTX/JAX compile error says `Could not open output file .../tmpxft_*` | Remote `TMPDIR` or overlay was full/unwritable during JIT | Check `df -h /root/helios-rl/tmp /tmp`; clean caches/checkpoints, ensure `TMPDIR=/root/helios-rl/tmp`, then retry. |
+| `ptxas fatal: Internal error: writing file` | Disk/cache write failure, usually disk pressure | `df -h`; delete low-value full checkpoints/caches; rerun through queue after confirming free space. |
 | "no active csvs" in stream monitor | CSV is header-only (first eval not yet written) | Wait ~250k env steps for first eval row. Or verify `TDMPC_GLASS_OUTPUT_TAG` is set correctly in the launcher. |
 | MJX Warp-901 crash after ~1M steps | `act_noise` > 0.30 triggers graph-capture bug | Do not set `act_noise` above 0.30 on HopperHop. |
 | Run Inspector shows `standing_rate —` | `_diag.csv` not found (run pre-dates diag logging, or wrong output tag) | Only runs from 2026-05-19 onward write diag CSVs. |
@@ -376,7 +408,7 @@ Logs:
 | `DELETE` | `/api/queue/<id>` | Force-delete any task |
 | `POST` | `/api/queue/<id>/priority` | Adjust priority `{delta: ±1}` |
 | `POST` | `/api/queue/<id>/retry` | Reset running/failed/done → pending |
-| `GET` | `/api/queue/<id>/log` | Last 60 lines from `/tmp/fleet_<id>.log` on the box |
+| `GET` | `/api/queue/<id>/log` | Last 60 lines from `/tmp/tqd_<id>.log` on the box |
 | `POST` | `/api/queue/render` | Queue a render task |
 | `GET` | `/api/boxes` | Live GPU/CPU stats for all boxes |
 | `GET` | `/api/curves` | All discovered CSV paths |

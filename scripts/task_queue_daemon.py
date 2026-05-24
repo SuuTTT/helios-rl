@@ -12,10 +12,12 @@ Usage:
 import fcntl
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,6 +39,11 @@ BOXES = [
     ("ssh3_3070",     15229,  "ssh3.vast.ai",   0),
     ("ssh6_3080",     16779,  "ssh6.vast.ai",   0),
     ("ssh3_3060ti",   11271,  "ssh3.vast.ai",   0),
+    ("ssh4_8080",     15665,  "ssh4.vast.ai",   0),
+    ("ssh9_2060_gpu0", 17647, "ssh9.vast.ai",   0),
+    ("ssh9_2060_gpu1", 17647, "ssh9.vast.ai",   1),
+    ("ssh9_2060_gpu2", 17647, "ssh9.vast.ai",   2),
+    ("ssh9_2060_gpu3", 17647, "ssh9.vast.ai",   3),
 ]
 
 # Per-box XLA_MEM override used when env doesn't already specify it.
@@ -49,10 +56,19 @@ DEFAULT_MEM = {
     "ssh3_3070":     "0.55",
     "ssh6_3080":     "0.65",
     "ssh3_3060ti":   "0.55",
+    "ssh4_8080":      "0.65",
+    "ssh9_2060_gpu0": "0.35",
+    "ssh9_2060_gpu1": "0.35",
+    "ssh9_2060_gpu2": "0.35",
+    "ssh9_2060_gpu3": "0.35",
 }
 CUDA_MASK = {
     "ssh17637_gpu0": "CUDA_VISIBLE_DEVICES=0",
     "ssh17637_gpu1": "CUDA_VISIBLE_DEVICES=1",
+    "ssh9_2060_gpu0": "CUDA_VISIBLE_DEVICES=0",
+    "ssh9_2060_gpu1": "CUDA_VISIBLE_DEVICES=1",
+    "ssh9_2060_gpu2": "CUDA_VISIBLE_DEVICES=2",
+    "ssh9_2060_gpu3": "CUDA_VISIBLE_DEVICES=3",
 }
 
 
@@ -114,8 +130,8 @@ def is_box_idle(tag: str, port: int, host: str, gpu_idx: int) -> bool:
             return res.returncode != 0  # returncode 1 = no match = idle
         except Exception:
             return True
-    elif tag.startswith("ssh17637"):
-        # Dual-GPU box: check GPU memory on the specific CUDA index.
+    elif tag in CUDA_MASK:
+        # Multi-GPU box: check GPU memory on the specific CUDA index.
         cmd = ["ssh", "-p", str(port), "-i", SSH_KEY, "-o", "StrictHostKeyChecking=no",
                "-o", "ConnectTimeout=8", "-o", "BatchMode=yes",
                f"root@{host}",
@@ -141,6 +157,16 @@ def is_box_idle(tag: str, port: int, host: str, gpu_idx: int) -> bool:
 
 def rsync_code(port: int, host: str):
     """Rsync launcher and source code needed by queued experiment tasks."""
+    mkdir_cmd = [
+        "ssh", "-p", str(port), "-i", SSH_KEY,
+        "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=15",
+        "-o", "BatchMode=yes", f"root@{host}",
+        "mkdir -p /root/helios-rl/scripts /root/helios-rl/src",
+    ]
+    try:
+        subprocess.run(mkdir_cmd, timeout=30, capture_output=True, check=True)
+    except Exception as e:
+        log(f"mkdir remote code dirs on {host}:{port} failed: {e}")
     for rel in ("scripts", "src"):
         cmd = [
             "rsync", "-az", "--delete",
@@ -165,6 +191,25 @@ def launch_task(task: dict, tag: str, port: int, host: str):
     mem_key = "XLA_PYTHON_CLIENT_MEM_FRACTION"
     if mem_key not in env:
         env = f"{env} {mem_key}={DEFAULT_MEM.get(tag, '0.65')}"
+    if tag == "ssh4_8080":
+        # ssh4's Vast image has a tight cgroup pids.max=256. JAX/XLA can abort
+        # during compile if it tries to create the default host thread pool.
+        env_map = parse_env(env)
+        for key in (
+            "TF_NUM_INTRAOP_THREADS",
+            "TF_NUM_INTEROP_THREADS",
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+        ):
+            env_map.setdefault(key, "1")
+        xla_flags = env_map.get("XLA_FLAGS", "--xla_gpu_autotune_level=0")
+        for flag in ("--xla_cpu_multi_thread_eigen=false", "intra_op_parallelism_threads=1"):
+            if flag not in xla_flags:
+                xla_flags = f"{xla_flags} {flag}"
+        env_map["XLA_FLAGS"] = xla_flags
+        env = format_env(env_map)
 
     log(f"{tag} → launching task {task['id']}: {task['label']}")
 
@@ -218,6 +263,181 @@ def launch_task(task: dict, tag: str, port: int, host: str):
         log(f"{tag} launch error: {e}")
 
 
+def task_log_tail(task: dict, n: int = 80) -> str:
+    """Best-effort tail of a queue task's launcher log."""
+    task_id = task.get("id", "")
+    box = task.get("box", "")
+    log_path = f"/tmp/tqd_{task_id}.log"
+    if box == "local":
+        try:
+            return subprocess.check_output(["tail", "-n", str(n), log_path], timeout=5).decode(errors="replace")
+        except Exception:
+            return ""
+    box_info = next((b for b in BOXES if b[0] == box), None)
+    if not box_info:
+        return ""
+    _tag, port, host, _gpu_idx = box_info
+    cmd = [
+        "ssh", "-p", str(port), "-i", SSH_KEY,
+        "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=8",
+        "-o", "BatchMode=yes", f"root@{host}",
+        f"tail -n {int(n)} {shlex.quote(log_path)} 2>/dev/null || true",
+    ]
+    try:
+        return subprocess.check_output(cmd, timeout=12).decode(errors="replace")
+    except Exception:
+        return ""
+
+
+def task_eval_log(task: dict) -> str:
+    """Best-effort eval-line extraction from a task log."""
+    task_id = task.get("id", "")
+    box = task.get("box", "")
+    log_path = f"/tmp/tqd_{task_id}.log"
+    pattern = r"step=.*pi_reward=.*MPPI="
+    if box == "local":
+        try:
+            return subprocess.check_output(["grep", "-E", pattern, log_path], timeout=8).decode(errors="replace")
+        except Exception:
+            return ""
+    box_info = next((b for b in BOXES if b[0] == box), None)
+    if not box_info:
+        return ""
+    _tag, port, host, _gpu_idx = box_info
+    cmd = [
+        "ssh", "-p", str(port), "-i", SSH_KEY,
+        "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=8",
+        "-o", "BatchMode=yes", f"root@{host}",
+        f"grep -E {shlex.quote(pattern)} {shlex.quote(log_path)} 2>/dev/null || true",
+    ]
+    try:
+        return subprocess.check_output(cmd, timeout=15).decode(errors="replace")
+    except Exception:
+        return ""
+
+
+def infer_finished_status(task: dict) -> str:
+    """Return done/failed from the launcher log when possible."""
+    tail = task_log_tail(task)
+    if "No such file or directory" in tail:
+        return "failed"
+    if "ERROR in " in tail:
+        return "failed"
+    if "done status=" in tail and "done status=0" not in tail:
+        return "failed"
+    if "all done status=" in tail and "all done status=0" not in tail:
+        return "failed"
+    return "done"
+
+
+def parse_env(env: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for item in shlex.split(env or ""):
+        if "=" in item:
+            k, v = item.split("=", 1)
+            out[k] = v
+    return out
+
+
+def format_env(env_map: dict[str, str]) -> str:
+    return " ".join(f"{k}={shlex.quote(str(v))}" for k, v in env_map.items())
+
+
+def normalized_family_env(env: str) -> tuple[tuple[str, str], ...]:
+    skip = {"SEEDS", "PROBE_ID", "CUDA_VISIBLE_DEVICES"}
+    return tuple(sorted((k, v) for k, v in parse_env(env).items() if k not in skip))
+
+
+def best_any_from_log(task: dict) -> float | None:
+    text = task_eval_log(task)
+    best = None
+    for line in text.splitlines():
+        m = re.search(r"pi_reward=\s*([-+]?\d+(?:\.\d+)?)\s+MPPI=\s*([-+]?\d+(?:\.\d+)?)", line)
+        if not m:
+            continue
+        val = max(float(m.group(1)), float(m.group(2)))
+        best = val if best is None else max(best, val)
+    return best
+
+
+def existing_family_seeds(tasks: list[dict], family_key: tuple[tuple[str, str], ...]) -> set[int]:
+    seeds: set[int] = set()
+    for task in tasks:
+        if normalized_family_env(task.get("env", "")) != family_key:
+            continue
+        for token in parse_env(task.get("env", "")).get("SEEDS", "").split():
+            try:
+                seeds.add(int(token))
+            except ValueError:
+                pass
+    return seeds
+
+
+def auto_promote_task(tasks: list[dict], task: dict, status: str) -> None:
+    """Append follow-up seed tasks according to Iteration 9 promotion thresholds."""
+    if task.get("type") == "render" or task.get("auto_promoted"):
+        return
+    launcher = task.get("launcher", "")
+    env = task.get("env", "")
+    if "run_phasei9_glass_probe.sh" not in launcher or "SEEDS=" not in env:
+        return
+    best = best_any_from_log(task)
+    if best is None:
+        return
+
+    # Failed-but-informative runs get a 100-point lower bar. This covers SIGKILL
+    # or infra failures after useful eval rows, without promoting header-only runs.
+    discount = 100.0 if status == "failed" else 0.0
+    if best >= 600.0 - discount:
+        add_count = 5
+    elif best >= 500.0 - discount:
+        add_count = 2
+    elif best >= 380.0 - discount:
+        add_count = 1
+    else:
+        return
+
+    family_key = normalized_family_env(env)
+    existing = existing_family_seeds(tasks, family_key)
+    env_map = parse_env(env)
+    base_probe = env_map.get("PROBE_ID", task.get("id", "probe"))
+    priority = int(task.get("priority", 7))
+    added = 0
+    for seed in range(1, 11):
+        if seed in existing:
+            continue
+        new_env = dict(env_map)
+        new_env["SEEDS"] = str(seed)
+        new_env["PROBE_ID"] = f"{base_probe}_auto_s{seed}"
+        new_task = {
+            "id": "t" + uuid.uuid4().hex[:7],
+            "label": f"auto-promote {base_probe} seed {seed} from {task['id']} best_any={best:.1f}",
+            "launcher": launcher,
+            "env": format_env(new_env),
+            "priority": priority,
+            "status": "pending",
+            "box": None,
+            "created_at": now_iso(),
+            "started_at": None,
+            "ended_at": None,
+            "auto_parent": task["id"],
+            "auto_reason": f"best_any={best:.1f} status={status} add_count={add_count}",
+        }
+        tasks.append(new_task)
+        existing.add(seed)
+        added += 1
+        if added >= add_count:
+            break
+    task["auto_promoted"] = {
+        "best_any": best,
+        "status": status,
+        "added": added,
+        "at": now_iso(),
+    }
+    if added:
+        log(f"auto-promoted {task['id']} best_any={best:.1f} status={status}: added {added} seed task(s)")
+
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 def poll_once():
@@ -238,9 +458,11 @@ def poll_once():
     changed = False
     for t in running:
         if t.get("box") in idle_boxes:
-            log(f"task {t['id']} ({t['label']}) done on {t['box']}")
-            t["status"] = "done"
+            status = infer_finished_status(t)
+            log(f"task {t['id']} ({t['label']}) {status} on {t['box']}")
+            t["status"] = status
             t["ended_at"] = now_iso()
+            auto_promote_task(tasks, t, status)
             changed = True
 
     if changed:

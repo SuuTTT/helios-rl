@@ -1,266 +1,288 @@
-# Iteration 8 — Helios plan to meet G1 and G2 (benchmark-fair)
+# Iteration 8 — Final analysis
 
-Companion to `iteration_7_codex.md` (Codex's draft) and
-`mppi_vs_pi_analysis.md`. Read those first for the K_UPDATE audit and the
-pi-vs-MPPI evaluator mismatch.
-
-Phase-eval re-score source:
+Date opened: 2026-05-21
+Finalized: 2026-05-22
+Companion docs:
 - `phase_eval_rescore_2026-05-21.md`
+- `mppi_vs_pi_analysis.md`
+- `iteration_9.md`
 
-Goal:
-- **G1**: 5/5 HopperHop seeds > 500 by verified `best_any = max(best_pi, best_mppi)`, benchmark-fair (no reward shaping, no BC, no env edits, eval on original reward).
-- **G2**: at least 1 seed > 600 by verified `best_any`, benchmark-fair.
+## Goal
 
-## §0. Re-diagnosis (what 25 phases + Codex Phase-aa actually tell us)
+- **G1**: 5/5 HopperHop seeds above 500 by verified
+  `best_any = max(best_pi, best_mppi)`.
+- **G2**: at least one benchmark-fair seed above 600 by verified `best_any`.
+- Constraints: benchmark-fair only; no reward shaping, no demonstrations, no
+  environment edits, original eval reward.
 
-Cross-phase G1/G2 tally as of 2026-05-21:
+## Executive conclusion
 
-| Phase | n | G1 | G2 | Max | Notes |
-|---|---|---|---|---|---|
-| **Phase-t** (knee + Glass) | 4 | 2 | **1 (612)** | 612 | only G2 ever — unfair |
-| Phase-1b_remote (early Glass) | 5 | 3 | 0 | 562 | best historical hit-rate |
-| Phase-aa K=128 (Codex) | 5 | 1 | 0 | 539 | K_UPDATE audit; `best_any` does not change G1 count |
-| Phase-aa K=256 (Codex) | 3 | 1 | 0 | 561 | same G1 hit-rate as K=128, higher `best_any` ceiling |
-| Phase-q knee | 11 | 4 | 0 | 557 | shaping, unfair |
-| Phase-o (Glass-off-late) | 3 | 1 | 0 | 578 | fair |
-| Phase-r1 soft / Phase-r2 gait | 4+4 | 1+1 | 0 | 553 / 510 | shaping |
-| Phase-r-stack | 5 | 0 | 0 | 16 | destructive interaction |
-| Phase-z vanilla (10M) | 4 | 1 | 0 | 535 | fair; seeds 2 and 5 are `pi`-selected under `best_any` |
+Iteration 8 did **not** find a 5/5 G1 method.
 
-**Hard observations**:
+Final result by phase:
 
-1. **K=128 and K=256 do not change G1 hit-rate** (both 1/3 in smoke, K=128 was 1/5 in Phase-aa). Codex's K_UPDATE hypothesis explains *one* stuck-seed rescue (s1 went 234 → 538) but does not solve the seed-level distribution. **The basin-lottery survives the training-ratio fix.**
-2. **No fair recipe has produced 5/5 G1** in 25 phases. Best fair was Phase-1b 3/5 (iter 1, before our regressions).
-3. **G2 only fires under reward shaping** (Phase-t). The fair ceiling is ~560 across all converged winners.
-4. **Per the rollout-video analysis** (suuttt.github.io blog §3): winners maintain *stable* clusters per gait phase; stuck seeds have clusters *oscillating within one gait phase*. Glass's structural-entropy loss minimises aggregate cut edges but does **not** enforce temporal stability within phases. So Glass learns rich descriptions of whatever gait is found — including the wrong one. *A good representation of the wrong gait is useless.*
-5. **New Codex insight: MPPI is often worse than pi.** Across de-duplicated
-HopperHop CSVs, MPPI < pi at the same eval step in **896 / 3133 = 28.6%** of
-paired evals. Even when pi >= 400, MPPI is lower in **51 / 403 = 12.7%** of
-cases. At run level, best pi beats best MPPI in **23 / 140 = 16.4%** of runs.
-This means MPPI-only checkpointing can discard a genuinely better actor.
-   A focused re-score of recent fair phases (`phaseaa`, `phasez`, `phasex`) is
-   now recorded in `phase_eval_rescore_2026-05-21.md`; it changes checkpoint
-   selection for several seeds, but does not materially change the 5/5 G1
-   conclusion.
+| Phase | n | Mean best_any | Median | G1 | G2 | Max | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Historical Phase1b | 5 | 428.8 | 526.0 | 3/5 | 0/5 | 562.1 | best fair hit-rate so far |
+| Phase1b_10M rerun | 5 | 389.5 | 354.6 | 1/5 | 0/5 | 550.0 | longer cap does not rescue weak seeds |
+| **Phase-ar** auto-restart | 5 | 395.2 | 349.2 | 1/5 | 0/5 | 584.6 | threshold too weak; no restart rows fired |
+| **Phase-mpc-lite** MPPI-gated distill | 5 | 243.4 | 246.1 | 0/5 | 0/5 | 252.4 | falsified as configured |
+| **Phase-g2** temp-stability 0.05 | 5 | 359.0 | 289.1 | 1/5 | 0/5 | 570.6 | one winner, not robust |
 
-**Mechanism of basin lock** (per the blog):
-- Three causes converge in the first ~200k steps: weight init, early exploration trajectory, MPPI noise.
-- After ~200k env steps, Q has fit value estimates to whatever gait the policy produces; gradients push toward that gait's local optimum; loop self-reinforces.
+The useful Iteration 8 result is diagnostic:
 
-## §1. Why every iter 1-6 intervention failed to fix this
+1. **Measurement was improved permanently.** Best-pi, best-MPPI, and best-any
+   checkpointing/reporting are required because MPPI can underperform the
+   deterministic actor.
+2. **The K=128 / EXPL_UNTIL=500k / latent-smooth stack did not improve
+   robustness.** It often hurt hard seed 1 basin entry.
+3. **The old Phase1b-style Glass recipe remains the best fair hit-rate family.**
+   Iteration 9 should iterate around Phase1b knobs and hard-seed probes rather
+   than continuing to vary the failed Iteration 8 stack.
+4. **Phase-ar was not a clean test of the restart hypothesis.** All five CSVs
+   contain zero `restart` rows. With `restart_threshold=100`, the mechanism did
+   not actually fire in the completed sweep, so the result falsifies this
+   configuration, not the broader idea of stronger/harder restart semantics.
 
-| Lever | What it changed | Why basin-lock survives |
+## What Iteration 8 tested
+
+Iteration 8 had four concrete components:
+
+| Component | Purpose | Status |
 |---|---|---|
-| Latent smoothing (Phase-f/j) | mid-game representation smoothness | doesn't touch basin entry |
-| NS=2048 MPPI (Phase-x) | post-lock planning quality | better plans within the wrong gait |
-| EXPL_UNTIL=500k (Phase-p) | random coverage before policy locks | helps sometimes (s4=538) but doesn't fix init/MPPI-noise causes |
-| Knee penalty (Phase-t) | reward gradient → no-torso-contact → hop | works (G2 hit), unfair |
-| Hierarchical Glass (Phase-y) | coarser partition | still describes whatever gait was learned |
-| Cluster intrinsic (Path P/Pa) | exploration bonus | hand-off to extrinsic still locked basin |
-| Reward stacks (r-stack) | shaping cocktail | destructive — pi froze, best=16 |
-| K_UPDATE 64→128 (Codex aa) | training ratio fix | individual seeds train better, but lottery persists |
-| MPPI-only selection | checkpoint/eval metric | can under-rank good deterministic actors when planner/model mismatch is high |
+| Phase-eval | Track/save `best_pi`, `best_mppi`, and `best_any` | adopted permanently |
+| Phase-ar | TD-MPC2 + K=128 + NS=2048 + EXPL_UNTIL=500k + plateau restart | completed, negative |
+| Phase-mpc-lite | TD-MPC2 + MPPI-gated actor distillation | completed, negative |
+| Phase-g2 | Glass V2 temporal-stability loss, coef 0.05 | completed, mixed but not robust |
 
-The pattern is consistent: **interventions improve post-basin-lock performance but do not change the basin-entry distribution**. Iteration 8 must change both basin-entry and measurement.
+Phase1b_10M was also analyzed as a control: it reran the historical Phase1b
+Glass recipe with a longer 10M cap and 3M patience.
 
-## §2. Four levers that change basin entry and measurement (proposed)
+## Final per-seed results
 
-Four orthogonal mechanisms, in EV order. Each is benchmark-fair — pure algorithm
-or measurement changes, eval reward unchanged.
+Scores are canonical de-duplicated CSV readouts. `selector` is the evaluator
+that achieved `best_any`.
 
-### §2.0 Phase-eval — **Best-of-pi-or-MPPI checkpointing** (new, immediate)
+### Historical Phase1b
 
-**Idea**: stop treating MPPI as the sole evaluator/checkpoint selector. Save and
-track:
+Glass baseline recipe from the earlier best fair family.
 
-```
-best_pi.pkl
-best_mppi.pkl
-best_any.pkl = argmax(max(pi_reward, mppi_reward))
-```
+| Seed | best_any | Step | Selector | best_pi | best_mppi | Last step |
+|---:|---:|---:|---|---:|---:|---:|
+| 1 | 526.0 | 3.00M | mppi | 481.6 @ 2.50M | 526.0 @ 3.00M | 4.00M |
+| 2 | 526.3 | 4.00M | mppi | 524.1 @ 4.00M | 526.3 @ 4.00M | 4.00M |
+| 3 | 294.4 | 4.00M | mppi | 278.7 @ 4.00M | 294.4 @ 4.00M | 4.00M |
+| 4 | 235.4 | 3.00M | pi | 235.4 @ 3.00M | 227.1 @ 3.50M | 4.00M |
+| 5 | 562.1 | 4.00M | mppi | 538.8 @ 4.00M | 562.1 @ 4.00M | 4.00M |
 
-Dashboard and iteration reports should show `best_pi`, `best_mppi`, and
-`best_any`. A seed counts as "candidate solved" if either pi or MPPI reaches
-500, then gets video/original-reward rollout verification.
+Summary: G1 3/5, G2 0/5, mean 428.8.
 
-**Why this matters**: MPPI is a planner through the learned latent dynamics and
-reward model. On HopperHop, small contact-timing errors can make MPPI search into
-actions that are model-favoured but real-env-bad. The actor can sometimes be the
-more reliable controller because it has already settled into a coherent gait.
+### Phase1b_10M rerun
 
-**Implementation**:
-- In `scripts/run_benchmark.py`, save `best_pi.pkl` when pi improves and
-  `best_any.pkl` when either evaluator improves the run's best score.
-- Add CSV/dashboard derived fields:
-  - `best_pi`
-  - `best_mppi`
-  - `best_any`
-  - `pi_minus_mppi_last`
-  - warning if `pi - mppi >= 100`
-- Render both best-pi and best-MPPI checkpoints when their scores differ by
-  >=50.
+Same old Phase1b Glass knobs, longer cap.
 
-**Decision impact**: this may not create new behavior, but it changes which
-policies we preserve and inspect. It also prevents false negatives where a seed
-looks below 500 by MPPI while pi is already near/over threshold.
+| Seed | best_any | Step | Selector | best_pi | best_mppi | Last step |
+|---:|---:|---:|---|---:|---:|---:|
+| 1 | 550.0 | 9.00M | mppi | 453.4 @ 10.00M | 550.0 @ 9.00M | 10.00M |
+| 2 | 292.1 | 9.25M | mppi | 274.7 @ 9.00M | 292.1 @ 9.25M | 10.00M |
+| 3 | 419.9 | 5.50M | mppi | 393.2 @ 6.25M | 419.9 @ 5.50M | 6.50M |
+| 4 | 331.0 | 6.75M | mppi | 305.0 @ 6.75M | 331.0 @ 6.75M | 6.75M |
+| 5 | 354.6 | 5.25M | mppi | 335.5 @ 4.25M | 354.6 @ 5.25M | 5.25M |
 
-**Risk**: pi can be noisy too. Mitigation: "candidate solved" requires a render
-or extra rollout verification, not just one lucky pi row.
+Summary: G1 1/5, G2 0/5, mean 389.5.
 
-### §2.1 Phase-ar — **Auto-Restart on plateau detection** (highest-EV pragmatic)
+Interpretation:
+- Longer training rescued seed 1 but did not rescue the weak seeds.
+- Seed 4 improved from 235.4 to 331.0 in the best duplicate rerun, still far
+  below G1.
+- "Just run Phase1b longer" is not a 5/5 path.
 
-**Idea**: monitor per-seed best-MPPI. If at 1.0M env steps no eval row >100, the seed is basin-locked. Reset policy + Q to fresh random init, **keep** encoder + dynamics + replay buffer + RNG offset. Continue training; restart-count capped at 3 per seed.
+### Phase-ar — auto-restart
 
-**Why this works**: each restart is a fresh basin-entry attempt with the encoder/dynamics already pre-warmed by the replay buffer. The policy gets a clean shot at the gait basin without re-learning physics. With per-attempt G1 ≈ 0.30, 3 attempts → 1 − 0.7³ = **66% per seed**; 5-seed sweep → 0.66⁵ × 5 ≈ 1.6 expected winners minimum, distribution shifts heavily toward 5/5.
+Config:
+- `tdmpc2`
+- K=128
+- NS=2048
+- EXPL_UNTIL=500k
+- latent smooth 0.001 after 250k
+- `restart_threshold=100`
+- `restart_check_at=1M`
+- `restart_max_attempts=3`
 
-**Implementation**:
-- `--restart_on_plateau` CLI flag (default off)
-- `--restart_check_at <N>` env steps (default 1_000_000)
-- `--restart_threshold <V>` best-MPPI floor below which restart fires (default 100)
-- `--restart_max_attempts <N>` (default 3)
-- On restart: re-init `params['pi']` + `params['q']` with new RNG; preserve `params['enc']`, `params['dyn']`, replay buffer; clear best-MPPI tracker; append a row `step,reward,eval_type=restart` to the CSV for visibility.
-- Total wall-time impact: ~30% worst-case if all 3 attempts trigger and converge separately.
+| Seed | best_any | Step | Selector | best_pi | best_mppi | Last step | Restart rows |
+|---:|---:|---:|---|---:|---:|---:|---:|
+| 1 | 349.2 | 2.50M | mppi | 293.3 @ 2.50M | 349.2 @ 2.50M | 2.50M | 0 |
+| 2 | 474.5 | 7.75M | mppi | 294.3 @ 8.50M | 474.5 @ 7.75M | 10.00M | 0 |
+| 3 | 271.9 | 5.00M | mppi | 257.6 @ 4.00M | 271.9 @ 5.00M | 8.25M | 0 |
+| 4 | 295.8 | 2.25M | mppi | 286.2 @ 1.75M | 295.8 @ 2.25M | 5.50M | 0 |
+| 5 | 584.6 | 7.75M | mppi | 521.9 @ 7.75M | 584.6 @ 7.75M | 7.75M | 0 |
 
-**Risk**: encoder may have learned a "crawling-friendly" representation in the first attempt. Mitigation: also re-init encoder if attempt 2 still plateaus by 1.5M (escalating reset).
+Summary: G1 1/5, G2 0/5, mean 395.2.
 
-### §2.2 Phase-mpc-lite — **MPPI-gated planner distillation** (algorithmic upgrade)
+Interpretation:
+- The configured auto-restart did not solve basin entry.
+- Since restart rows are zero, the threshold was too permissive: seeds were
+  above 100 early enough to avoid restart while still converging to sub-G1
+  gaits.
+- Future restart work should use `best_any`, a much higher threshold such as
+  300 at 1M, and should verify restart rows in a smoke run before spending a
+  full sweep.
 
-**Idea**: add planner distillation only when MPPI is not clearly worse than pi:
+### Phase-mpc-lite — MPPI-gated distill
 
-```
-L_mpc = mask * lambda_mpc * ||pi(z) - mppi_planned_action(z)||^2
-mask = 0 if recent_eval(pi - mppi) >= 100 else 1
-```
+Config:
+- `tdmpc2`
+- K=128
+- NS=2048
+- EXPL_UNTIL=500k
+- latent smooth 0.001 after 250k
+- `mpc_distill_coef=1.0`
+- `mpc_distill_anneal_steps=3M`
+- `mpc_distill_disable_gap=100`
+- `mpc_distill_batch_size=16`
 
-MPPI can discover actions the policy gradient misses, but the new analysis shows
-it is also worse than pi in a large minority of evals. So distillation must be
-gated: imitate MPPI only when the planner and actor are reasonably aligned.
-Anneal `lambda_mpc` from 1.0 -> 0.0 over 3M env steps so pi becomes independent
-late.
+| Seed | best_any | Step | Selector | best_pi | best_mppi | Last step |
+|---:|---:|---:|---|---:|---:|---:|
+| 1 | 246.1 | 6.50M | mppi | 231.1 @ 6.50M | 246.1 @ 6.50M | 7.25M |
+| 2 | 247.6 | 7.00M | mppi | 225.9 @ 9.50M | 247.6 @ 7.00M | 10.00M |
+| 3 | 252.4 | 7.75M | mppi | 240.3 @ 6.75M | 252.4 @ 7.75M | 7.75M |
+| 4 | 233.1 | 7.50M | mppi | 222.0 @ 8.75M | 233.1 @ 7.50M | 10.00M |
+| 5 | 237.7 | 6.00M | mppi | 224.7 @ 6.25M | 237.7 @ 6.00M | 6.75M |
 
-**Why benchmark-fair**: zero demonstrations, no env modification, eval unchanged. The planner is the model talking to itself. (TD-MPC2 doesn't currently do this — pi loss is exp(advantage)·log_pi, not MPPI imitation.)
+Summary: G1 0/5, G2 0/5, mean 243.4.
 
-**Implementation**: small loss addition inside `make_update_fn`; new flags
-`--mpc_distill_coef`, `--mpc_distill_anneal_steps`, and
-`--mpc_distill_disable_gap`.
+Interpretation:
+- This is the cleanest negative result in Iteration 8.
+- Distilling toward MPPI, even with the simple eval-gap gate, appears to keep
+  all seeds in weak local behavior.
+- Do not continue this branch without a materially different gate or a rollout
+  diagnostic showing MPPI is producing useful actions on the target states.
 
-**Risk**: if pi tracks MPPI too tightly during the early random-exploration phase
-or during model/planner mismatch, it may inherit bad actions. Mitigation: only
-apply after `EXPL_UNTIL`, and disable when `pi - mppi` exceeds the gap.
+### Phase-g2 — Glass V2 temporal stability, coef 0.05
 
-### §2.3 Phase-g2 — **Glass V2: temporal stability loss** (the blog's smoking gun)
+Config:
+- `tdmpc-glass`
+- K=128
+- NS=2048
+- EXPL_UNTIL=500k
+- latent smooth 0.001 after 250k
+- `glass_lambda_temp_stability=0.05`
 
-**Idea**: per the blog, winning seeds have stable cluster assignments within a gait phase; stuck seeds oscillate within one phase. Add Glass loss term:
+| Seed | best_any | Step | Selector | best_pi | best_mppi | Last step |
+|---:|---:|---:|---|---:|---:|---:|
+| 1 | 246.2 | 8.50M | mppi | 111.1 @ 8.25M | 246.2 @ 8.50M | 8.50M |
+| 2 | 570.6 | 5.50M | mppi | 558.4 @ 8.50M | 570.6 @ 5.50M | 8.50M |
+| 3 | 284.5 | 8.25M | mppi | 261.8 @ 10.00M | 284.5 @ 8.25M | 10.00M |
+| 4 | 404.8 | 8.25M | mppi | 342.5 @ 9.00M | 404.8 @ 8.25M | 9.25M |
+| 5 | 289.1 | 4.25M | pi | 289.1 @ 4.25M | 241.5 @ 5.25M | 6.25M |
 
-```
-L_temp = (1 - cos_sim(S[n*(z_t)], S[n*(z_{t-1})]))
-```
+Summary: G1 1/5, G2 0/5, mean 359.0.
 
-Penalises cluster oscillation between consecutive steps. Tests whether enforcing temporal stability of clusters → stable gait → better basins.
+Interpretation:
+- Temporal stability has a real positive signal: seed 2 reached 570.6, and seed
+  4 improved to 404.8.
+- It is not robust at coefficient 0.05. Seeds 1, 3, and 5 remained sub-300.
+- The likely failure mode is over-stabilizing the wrong early gait phase rather
+  than helping the model discover a better basin.
+- Follow-up should test this idea only inside the better Phase1b recipe or with
+  a delayed/decayed schedule; raw Phase-g2 0.05 is not a 5/5 candidate.
 
-**Why this might work**: the structural-entropy loss minimises cut edges in the aggregate transition graph but does not penalise within-phase flicker. The temporal-stability loss bridges that gap.
+## Measurement result: Phase-eval stays
 
-**Implementation**: 5 lines added to `tdmpc_glass.py`'s Glass loss function. New flag `--glass_temp_stability_coef` (default 0; try 0.05).
+Iteration 8 permanently changed how runs are judged:
 
-**Risk**: too high → over-coarse partition collapsing to 1 cluster. Mitigation: balance against the existing lambda_balance hinge.
+- Save and report `best_pi`.
+- Save and report `best_mppi`.
+- Save and report `best_any`.
+- Treat G1/G2 candidates as `best_any`, then verify with rollout/video.
 
-**Run note, 2026-05-21 18:40 UTC**:
-- Current local Phase-g2 seed 1 is a direct/manual local run on this machine via
-  `scripts/run_phaseg2_temp_stability.sh`, not a newly launched central-queue
-  task. The queue entry `tc5930bf` records the earlier failed local attempt, so
-  the dashboard queue state can look stale while the local process is still
-  live.
-- Local command lineage: `bash scripts/run_phaseg2_temp_stability.sh` →
-  `scripts/run_benchmark.py --algos tdmpc-glass --tasks HopperHop --seed 1
-  --k_update 128 --mppi_n_samples 2048 --expl_until 500000
-  --glass_lambda_temp_stability 0.05`.
-- Current local seed 1 status: running past 8.2M env steps; best_any so far is
-  144.5 at 8.0M, so this seed appears stuck.
-- Remote seed 2 is the meaningful positive Phase-g2 signal so far: running on
-  `ssh6_4060`, best_any 570.6 at 5.5M.
-- Seeds 3-5 marked `done` locally are not valid completed runs; they failed
-  during JIT after disk pressure (`ptxas fatal: Internal error: writing file`)
-  and should be rerun through the queue after the current slots clear.
+Reason:
+- Across de-duplicated HopperHop CSVs, MPPI is worse than pi in a substantial
+  minority of matched evals.
+- In Iteration 8 itself, Phase-g2 seed 5 is selected by pi, not MPPI.
+- MPPI-only checkpointing can discard the better controller.
 
-### §2.4 What we explicitly DON'T propose
+This was not enough to change the Iteration 8 G1/G2 conclusion, but it prevents
+future false negatives and makes render/debug selection more reliable.
 
-- More K_UPDATE seeds — Codex Phase-aa data already shows no hit-rate change.
-- MPPI-only G1/G2 accounting — contradicted by `mppi_vs_pi_analysis.md`.
-- Wider exploration (EXPL_UNTIL > 500k) — Phase-p tested this; helped one seed (s4=538) but did not change the 5-seed distribution. Worth re-running only if §2.1-2.3 all fail.
-- Action prior (sine wave during exploration) — too close to "knowledge injection", borderline-fair.
-- More reward shaping or stacks — falsified in iter 6.
-- BC from a winner — DEFERRED per user from iter 5/6.
-- Larger Glass (K_super, more prototypes) — falsified.
-- H=5 MPPI horizon — falsified iter 2.
+## What failed and why
 
-## §3. Experiment ladder
+### Phase-ar
 
-Each phase = 5 seeds. Run on the 5 stable fast boxes: local 4070 Ti, ssh6 4060, ssh1 2080 Ti, ssh3 3070, ssh6 3080. Use ssh3 3060 Ti as parallel slot for 6th seed if needed. Skip 2x3060 for headline runs (the 5.5M SIGKILL pattern eats winners).
+The idea was plausible, but the implemented run did not exercise it. The
+restart floor of 100 was below the score range of several bad basins. Those
+seeds avoided restart but still finished around 270-350.
 
-| # | Phase | What | Why |
-|---|---|---|---|
-| 0 | **Phase-eval** | Add best-pi/best-any checkpointing and dashboard/reporting. Re-score recent Phase-aa/ab/z/x runs by `best_any`. | Immediate measurement fix. Avoids discarding actors better than MPPI. |
-| 1 | **Phase-ar** | TD-MPC2 + NS=2048 + EXPL_UNTIL=500k + K=128 + **auto-restart** (3 attempts, threshold 100 @ 1M). 5 seeds. | Highest-EV behavioral lever: directly attacks basin lottery without reward shaping. Estimated 4-5 / 5 G1 candidates by best-any. |
-| 2 | **Phase-mpc-lite** | Do **not** imitate MPPI blindly. Add planner-consistency only when `mppi >= pi - margin`; skip when MPPI is clearly worse. | Uses the new insight: MPPI is useful when aligned, harmful when model/planner mismatch is large. |
-| 3 | **Phase-g2** | TD-MPC-Glass + NS=2048 + K=128 + **temporal-stability** (coef=0.05). 5 seeds. | Tests the blog's hypothesis about Glass V2. Salvages the Glass research direction. |
-| 4 | **Phase-ar-stack** | Phase-ar + MPPI-gated distillation (only if §1 doesn't hit 5/5 alone). 5 seeds. | Conservative additive stack of the two best fair levers. |
+Actionable lesson:
+- Any future restart probe must assert that restart rows appear in the CSV when
+  the condition should fire.
+- Use hard seed 1 or seed 4, threshold around 300 at 1M, and count by
+  `best_any`, not MPPI-only.
 
-**Decision rules**:
-- After Phase-ar 5-seed results: if 5/5 G1 → done with G1. If 3-4 / 5 G1 → run Phase-ar-stack. If ≤ 2 / 5 → auto-restart insufficient, prioritise Phase-mpc-lite.
-- Phase-mpc-lite and Phase-g2 can run in parallel with Phase-ar (different boxes).
-- G2 is downstream — once 5/5 G1 is achievable, push the winning recipe to 10 seeds and check tail (one of them should hit 600+).
+### Phase-mpc-lite
 
-## §4. Implementation plan (code work before any launches)
+The MPPI-gated distill branch compressed all seeds into a narrow 233-252 band.
+That is worse than baseline variability and worse than Phase-ar/Phase-g2.
 
-Four code changes in `src/helios/algorithms/tdmpc2.py` + `tdmpc_glass.py` +
-`scripts/run_benchmark.py`:
+Actionable lesson:
+- Do not use this loss as configured.
+- The MPPI-vs-pi insight should affect checkpointing and maybe action-selection
+  schedules, not naive imitation.
 
-0. **Best-pi/best-any checkpointing** (Phase-eval): ~30 lines in `train_tdmpc2`
-   - Track `best_pi`, `best_mppi`, and `best_any` separately.
-   - Save `best_pi.pkl`, `best_mppi.pkl`, and `best_any.pkl`.
-   - Store both evaluator scores and the selector (`pi` or `mppi`) in checkpoint payloads.
-   - Update dashboard/scripts to display `best_pi`, `best_mppi`, `best_any`, and `pi_minus_mppi`.
+### Phase-g2
 
-1. **Auto-restart** (Phase-ar): ~50 lines in `train_tdmpc2`
-   - Track `_last_improvement_step` per seed.
-   - At each eval, if `env_steps >= restart_check_at` and `best < restart_threshold`, set `_restart_pending=True`.
-   - On next batch step, re-init `params['pi']`, `params['q']`, `params['target_q']` (= params['q']) with a fresh PRNGKey; keep `params['enc']`, `params['dyn']`, `params['rew']`; reset opt state for pi+q (but keep enc+dyn opt state); clear best-MPPI; increment `_restart_count`.
-   - Log `restart` rows to CSV.
+Temporal stability is not worthless, but the 0.05 recipe is too brittle. It
+produced one strong winner, one mid result, and three weak results.
 
-2. **MPPI-gated MPC-distill** (Phase-mpc-lite): ~25 lines in `make_update_fn`
-   - Add `mpc_action_target` arg only for states where MPPI is not clearly worse than pi.
-   - Add loss term `mpc_distill_coef * mask * mean((pi(z) - mpc_action_target)**2)`.
-   - Gate the mask using eval-time evidence first: if current `pi - mppi >= 100`, disable distill until the next eval.
-   - Anneal coef linearly from 1.0 → 0.0 between `expl_until` and `expl_until + 3M`.
-   - This replaces the earlier unconditional MPC-distill proposal, because MPPI is empirically worse than pi in a large minority of cases.
+Actionable lesson:
+- If revisited, use Phase1b-compatible knobs, lower coefficient, delayed start,
+  or off-late schedules.
+- Compare cluster diagnostics and rollout videos before promoting.
 
-3. **Glass V2 temporal stability** (Phase-g2): ~10 lines in `tdmpc_glass.py`
-   - In the existing Glass loss, after computing `S[n_star(z)]`, also compute `S[n_star(z_{t-1}}]`.
-   - Add `temp_coef * (1 - cos_sim(...)).mean()` to total Glass loss.
+### Phase1b_10M
 
-Each change ships with a smoke test (30k steps locally, verify no crash + reward not NaN) before any 10M run.
+The longer rerun reduces confidence in "late escape" as an explanation. Several
+seeds spent millions more steps without reaching G1.
 
-## §5. Boxes idle right now (2026-05-21)
+Actionable lesson:
+- Basin entry remains the problem; more wall-clock alone is not enough.
 
-- **local 4070 Ti**: idle (Phase-rstack-nosmooth s1 reported best=0 — likely never escaped JIT or hit early-stop trivially; check log before launching new).
-- **ssh3 3070**: idle.
-- **ssh17637 (both GPUs)**: vast.ai box unreachable — skip for now.
+## Handoff to Iteration 9
 
-**Recommended first action when you approve this plan**:
-1. Implement §4.0 (best-pi/best-any checkpointing + dashboard surfacing) — low-risk, immediate.
-2. Re-score Phase-aa/ab/z/x by `best_any`; update G1/G2 accounting.
-3. Implement §4.1 (auto-restart) — ~1 h dev + smoke test.
-4. Launch Phase-ar on the 5 reachable fast boxes (5 seeds in parallel). Expected runtime ~6 h on the slowest (3060 Ti).
-5. Implement §4.2 and §4.3 in parallel while Phase-ar runs.
+Iteration 9 should use one-seed probes instead of full 5-seed sweeps until a
+mechanism shows a strong signal.
 
-**Do not launch Phase-ar yet** until §4.0 and §4.1 are implemented and smoke-tested.
+Recommended direction:
 
-## §6. What success looks like
+1. **Return to Phase1b-style Glass knobs.**
+   - `proto_temperature=0.7`
+   - `assign_logits_init_scale=0.5`
+   - `stopgrad_graph=true`
+   - short exploration first, not EXPL_UNTIL=500k by default
+2. **Probe hard seeds, especially seed 4.**
+   - Historical Phase1b seed 4: 235.4.
+   - Phase1b_10M seed 4: 331.0 best duplicate.
+   - A real 5/5 method must rescue this seed.
+3. **Keep best-any accounting and render both pi/MPPI when they disagree.**
+4. **Treat the Iteration 8 stack as deprioritized.**
+   - K=128 + EXPL_UNTIL=500k + latent smooth + temp stability is not the
+     default path forward.
+5. **If restart is revisited, make it a new hard-threshold probe.**
+   - The Iteration 8 sweep did not test an actually firing restart mechanism.
 
-- 5/5 G1 from one phase = G1 met (research goal), where G1 is counted by
-  verified `best_any >= 500`, not MPPI-only.
-- ≥1/5 G2 from a fair phase = G2 met (a benchmark-fair break of 600), counted by
-  verified `best_any >= 600`.
-- If Phase-ar hits 5/5 G1 alone → strongest possible result: basin-lottery defeats by reset alone, simpler than every algorithmic intervention tried.
-- If only Phase-ar-stack hits 5/5 → MPC-distill matters; document the joint recipe.
-- If nothing in §3 hits 5/5 → the problem is harder than basin-entry; pivot to investigating whether `Hopper-Hop` itself has a representation pathology (the encoder might genuinely cannot represent the foot-strike state crisply).
+Active Iteration 9 probe families derived from this conclusion:
+- Phase1b + K=128.
+- Phase1b + low temporal stability.
+- Phase1b + Glass off at 2M.
+- Hard-seed 4 versions of the above.
+
+## Final verdict
+
+Iteration 8 is complete and negative for G1/G2:
+
+- **G1 not achieved.**
+- **G2 not achieved.**
+- Best fair hit-rate remains historical Phase1b at 3/5.
+- Best fair score in Iteration 8 is Phase-ar seed 5 at 584.6, still below G2.
+- The most useful product of the iteration is the measurement fix plus the
+  decision to pivot toward Phase1b-derived hard-seed probes in Iteration 9.

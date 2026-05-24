@@ -54,6 +54,11 @@ BOXES = [
     ("ssh3_3070",     15229,   "ssh3.vast.ai",   0, "ssh3:15229 3070 (8GB)"),
     ("ssh6_3080",     16779,   "ssh6.vast.ai",   0, "ssh6:16779 3080 (10GB)"),
     ("ssh3_3060ti",   11271,   "ssh3.vast.ai",   0, "ssh3:11271 3060Ti (8GB)"),
+    ("ssh4_8080",     15665,   "ssh4.vast.ai",   0, "ssh4:15665 GPU0"),
+    ("ssh9_2060_gpu0", 17647,  "ssh9.vast.ai",   0, "ssh9:17647 2060 GPU0 (6GB)"),
+    ("ssh9_2060_gpu1", 17647,  "ssh9.vast.ai",   1, "ssh9:17647 2060 GPU1 (6GB)"),
+    ("ssh9_2060_gpu2", 17647,  "ssh9.vast.ai",   2, "ssh9:17647 2060 GPU2 (6GB)"),
+    ("ssh9_2060_gpu3", 17647,  "ssh9.vast.ai",   3, "ssh9:17647 2060 GPU3 (6GB)"),
 ]
 
 # Render workers scan the whole fleet dynamically. Keep local last so training
@@ -64,8 +69,13 @@ RENDER_MEM_FRACTION = {
     "ssh6_4060": "0.70",
     "ssh3_3060ti": "0.55",
     "ssh3_3070": "0.55",
+    "ssh4_8080": "0.65",
     "ssh6_3080": "0.65",
     "ssh1_2080ti": "0.75",
+    "ssh9_2060_gpu0": "0.35",
+    "ssh9_2060_gpu1": "0.35",
+    "ssh9_2060_gpu2": "0.35",
+    "ssh9_2060_gpu3": "0.35",
     "local": "0.70",
 }
 RENDER_POLL_SECONDS = 30
@@ -122,6 +132,19 @@ PHASE_NOTES: dict[str, str] = {
     "phaseab_codex_tdmpc2_5seed":"K_UPDATE winner, 5-seed vanilla tdmpc2",
     "phaseac_codex_glass_5seed": "K_UPDATE winner, 5-seed Glass vs tdmpc2 comparison",
     "phasead_codex_explmix":     "Fair expl-mix: random action prob 1->0 over 2M steps",
+    "phasear_restart_K128": "Auto-restart low early returns; tests whether bad basin seeds can be rescued by restart",
+    "phaseg2_tempstab_0.05": "Glass V2 temp-stability 0.05; tested stronger temporal assignment stability",
+    # Iter 9 - quick probes / seed promotion
+    "phasei9m": "Phase1b with Glass off after 2M, no temp-stability/no smooth; current off-schedule handoff probe",
+    "phasei9g": "Warmup 500k + temp-stability 0.01 + latent smooth; tests delayed Glass pressure",
+    "phasei9j": "No latent smooth + temp-stability 0.01; tests whether smoothing was blocking good basins",
+    "phasei9l": "Phase1b-style Glass + temp-stability 0.01; tests stabilizing the original Glass winner recipe",
+    "phasei9n": "Phase1b K=128 fill/rerun; estimates baseline variance under the current queue code",
+    "phasei9q": "Phase1b + temp-stability 0.01 with Glass off after 2M; tests late policy consolidation",
+    "phasei9r": "Phase1b with Glass off after 1M; tests earlier handoff from Glass shaping to actor learning",
+    "phasei9s": "Phase1b with Glass off after 1.5M; midpoint handoff between i9r and i9q",
+    "phasei9t": "Phase1b off after 1.5M on hard seed 4; stress-test midpoint handoff",
+    "phasei9u": "Phase1b off after 3M on hard seed 4; tests longer Glass guidance before handoff",
     # Smoke tests
     "smoke":        "Smoke test (hardware validation only)",
 }
@@ -398,6 +421,9 @@ def canonical_phase(phase: str) -> str:
 
     Preserved: _ns1024, _nosmooth, _nosoft, _codex_*, _knee, _soft, _gait, _stack.
     """
+    i9 = re.match(r"^(phasei9[a-z])(?:_|$)", phase, flags=re.IGNORECASE)
+    if i9:
+        return i9.group(1)
     result = _CANON_DEVICE_RE.sub("", phase)
     result = _CANON_VERSION_RE.sub("", result)
     return result or phase
@@ -1294,8 +1320,29 @@ def _sps_remaining_s(task: dict) -> float | None:
     return remaining_steps / sps
 
 
-def _compute_queue_etas(tasks: list[dict]) -> tuple[list[dict], str | None]:
-    """Add elapsed/remaining/eta fields to each task. Returns (annotated, queue_eta_iso)."""
+def _phase_key_from_text(text: str) -> str:
+    """Best-effort canonical phase key from task label/env/output tags."""
+    text = text or ""
+    for pat in (r"(phasei9[a-z])", r"(phase[a-z]+[a-z0-9_]*|phasex_ns1024)"):
+        m = re.search(pat, text, flags=re.IGNORECASE)
+        if m:
+            return canonical_phase(m.group(1))
+    return ""
+
+
+def _task_phase_key(task: dict) -> str:
+    env = task.get("env", "")
+    label = task.get("label", "")
+    m = re.search(r"PROBE_ID=([^\s]+)", env)
+    if m:
+        key = _phase_key_from_text(m.group(1))
+        if key:
+            return key
+    return _phase_key_from_text(f"{label} {env}")
+
+
+def _compute_queue_etas(tasks: list[dict]) -> tuple[list[dict], str | None, list[dict]]:
+    """Add ETA fields. Returns (annotated, queue_eta_iso, box_next_free)."""
     import heapq
     from datetime import datetime, timezone, timedelta
 
@@ -1350,10 +1397,12 @@ def _compute_queue_etas(tasks: list[dict]) -> tuple[list[dict], str | None]:
     # Box free-at times: running tasks → now + remaining; idle boxes → now.
     all_tags = [b[0] for b in BOXES]
     box_free: dict[str, datetime] = {tag: now for tag in all_tags}
+    box_task: dict[str, dict] = {}
     for t in tasks:
         if t["status"] == "running" and t.get("box") and t.get("started_at"):
             rem = est_remaining_s(t)
             box_free[t["box"]] = max(now + timedelta(seconds=rem), now)
+            box_task[t["box"]] = t
 
     # Simulate pending task scheduling with a min-heap of (free_time, box_tag).
     heap = [(ts, tag) for tag, ts in box_free.items()]
@@ -1407,15 +1456,99 @@ def _compute_queue_etas(tasks: list[dict]) -> tuple[list[dict], str | None]:
     active_etas = [t["eta_iso"] for t in result
                    if t["status"] in ("running", "pending") and t.get("eta_iso")]
     queue_eta = max(active_etas) if active_etas else None
-    return result, queue_eta
+    box_next_free = []
+    for tag in all_tags:
+        free_at = box_free.get(tag, now)
+        t = box_task.get(tag)
+        box_next_free.append({
+            "box": tag,
+            "free_at_iso": to_iso(free_at),
+            "free_in_s": max(0, int((free_at - now).total_seconds())),
+            "idle_now": tag not in box_task,
+            "task_id": t.get("id") if t else None,
+            "label": t.get("label") if t else None,
+            "phase": _task_phase_key(t) if t else None,
+        })
+    box_next_free.sort(key=lambda r: (r["free_in_s"], r["box"]))
+    return result, queue_eta, box_next_free
+
+
+def _promising_phases(tasks: list[dict], annotated_tasks: list[dict], limit: int = 8) -> list[dict]:
+    """Rank phase families that look useful enough to watch right now."""
+    csvs = discover_csvs()
+    by_phase: dict[str, dict] = {}
+    for c in csvs:
+        phase = canonical_phase(c["phase"])
+        entry = by_phase.setdefault(phase, {"bests": [], "variants": set()})
+        if c["phase"] != phase:
+            entry["variants"].add(c["phase"])
+        best = eval_summary(c["path"])["best_any"]
+        if best >= 0:
+            entry["bests"].append(best)
+
+    queue_counts: dict[str, dict[str, int]] = {}
+    for t in tasks:
+        phase = _task_phase_key(t)
+        if not phase:
+            continue
+        counts = queue_counts.setdefault(phase, {"running": 0, "pending": 0, "failed": 0, "done": 0})
+        status = t.get("status", "")
+        if status in counts:
+            counts[status] += 1
+
+    rows = []
+    for phase in sorted(set(by_phase) | set(queue_counts)):
+        info = by_phase.get(phase, {"bests": [], "variants": set()})
+        bests = info["bests"]
+        n = len(bests)
+        mean_b = sum(bests) / n if n else None
+        max_b = max(bests) if bests else None
+        n_g1 = sum(1 for b in bests if b >= 500)
+        counts = queue_counts.get(phase, {"running": 0, "pending": 0, "failed": 0, "done": 0})
+        notes = PHASE_NOTES.get(phase, "")
+        lowered = notes.lower()
+        if any(word in lowered for word in ("falsified", "collapsed", "smoke test", "hardware validation")):
+            continue
+        # Keep active probes even before first CSV; otherwise require evidence.
+        if n == 0 and not counts["running"] and not counts["pending"]:
+            continue
+        score = 0.0
+        score += (max_b or 0) * 1.2
+        score += (mean_b or 0) * 0.7
+        score += n_g1 * 120
+        score += counts["running"] * 60 + counts["pending"] * 25
+        if max_b is not None and max_b >= 600:
+            score += 250
+        elif max_b is not None and max_b >= 500:
+            score += 150
+        elif max_b is not None and max_b >= 380:
+            score += 60
+        rows.append({
+            "phase": phase,
+            "n_with_data": n,
+            "mean_best": round(mean_b, 1) if mean_b is not None else None,
+            "max_best": round(max_b, 1) if max_b is not None else None,
+            "n_g1": n_g1,
+            "running": counts["running"],
+            "pending": counts["pending"],
+            "notes": notes,
+            "score": round(score, 1),
+        })
+    rows.sort(key=lambda r: (-r["score"], r["phase"]))
+    return rows[:limit]
 
 
 @app.route("/api/queue")
 def api_queue_get():
     tasks = _load_central_queue()
     tasks_sorted = sorted(tasks, key=lambda t: (t.get("priority", 10), t.get("created_at", "")))
-    annotated, queue_eta = _compute_queue_etas(tasks_sorted)
-    return jsonify({"tasks": annotated, "queue_eta": queue_eta})
+    annotated, queue_eta, box_next_free = _compute_queue_etas(tasks_sorted)
+    return jsonify({
+        "tasks": annotated,
+        "queue_eta": queue_eta,
+        "box_next_free": box_next_free,
+        "promising_phases": _promising_phases(tasks_sorted, annotated),
+    })
 
 
 @app.route("/api/queue", methods=["POST"])
@@ -1717,6 +1850,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .ri-path{color:#64b5f6;font-size:11px;font-family:ui-monospace,monospace;word-break:break-all}
   .ri-chevron{transition:transform .15s;font-size:14px;color:var(--muted)}
   .ri-chevron.open{transform:rotate(90deg)}
+  .summary-grid{display:grid;grid-template-columns:minmax(320px,.9fr) 1.4fr;gap:12px}
+  .summary-card{background:#1b1f2a;border:1px solid var(--line);border-radius:5px;padding:9px 11px}
+  .summary-title{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:6px}
+  .free-row,.prom-row{display:grid;gap:8px;align-items:start;border-top:1px solid #1e2535;padding:6px 0}
+  .free-row:first-of-type,.prom-row:first-of-type{border-top:0}
+  .free-row{grid-template-columns:105px 95px 1fr}
+  .prom-row{grid-template-columns:120px 150px 1fr}
+  .phase-note{color:var(--muted);font-size:11px;line-height:1.35}
 </style></head><body>
 <header>
   <h1>TD-MPC-Glass Live Dashboard</h1>
@@ -1725,6 +1866,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
 </header>
 
 <div class="container">
+
+  <section><h2>Fleet Summary <button class="refresh-btn" onclick="loadQueue()">&#x21bb; refresh</button></h2>
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="summary-title">Next GPU Free</div>
+        <div id="next-free-list" class="small">loading...</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-title">Promising Phases</div>
+        <div id="promising-list" class="small">loading...</div>
+      </div>
+    </div>
+  </section>
 
   <section><h2>Box Fleet <button class="refresh-btn" onclick="loadBoxes()">&#x21bb; refresh</button></h2>
     <table id="boxes"><thead>
@@ -2257,9 +2411,47 @@ function fmtEta(isoStr, short) {
   return short ? `~${rel}` : `~${rel} · ${label}`;
 }
 
+function renderFleetSummary(j){
+  const freeEl = document.getElementById('next-free-list');
+  if (freeEl) {
+    const rows = (j.box_next_free || []).slice(0, 6);
+    freeEl.innerHTML = rows.length ? rows.map((r, idx)=>{
+      const state = r.idle_now
+        ? '<span class="box-good">idle now</span>'
+        : `<span style="color:#64b5f6">${fmtEta(r.free_at_iso, false)}</span>`;
+      const label = r.label
+        ? `<span title="${r.label}">${r.phase ? `<b>${r.phase}</b>` : r.label}</span>`
+        : '<span style="opacity:.55">available</span>';
+      const next = idx === 0 ? '<span class="chip" style="background:#1f3d22;color:#7dd87b">next</span>' : '';
+      return `<div class="free-row">
+        <div class="mono">${r.box}</div>
+        <div>${state}</div>
+        <div>${next} ${label}</div>
+      </div>`;
+    }).join('') : '<span style="opacity:.6">No fleet data yet.</span>';
+  }
+  const promEl = document.getElementById('promising-list');
+  if (promEl) {
+    const rows = (j.promising_phases || []).slice(0, 8);
+    promEl.innerHTML = rows.length ? rows.map(p=>{
+      const max = p.max_best == null ? '—' : p.max_best.toFixed(1);
+      const mean = p.mean_best == null ? '—' : p.mean_best.toFixed(1);
+      const active = [p.running ? `${p.running} running` : '', p.pending ? `${p.pending} pending` : ''].filter(Boolean).join(' · ');
+      const activeStr = active ? `<span class="box-good">${active}</span>` : '<span style="opacity:.55">no active seeds</span>';
+      const statCls = (p.max_best ?? 0) >= 500 ? 'box-good' : ((p.max_best ?? 0) >= 380 ? 'box-warn' : '');
+      return `<div class="prom-row">
+        <div class="mono"><b>${p.phase}</b></div>
+        <div class="${statCls}">max ${max} · mean ${mean} · G1 ${p.n_g1}/${p.n_with_data}</div>
+        <div><div>${activeStr}</div><div class="phase-note">${p.notes || 'Queued probe; waiting for first eval rows.'}</div></div>
+      </div>`;
+    }).join('') : '<span style="opacity:.6">No promising phase data yet.</span>';
+  }
+}
+
 function loadQueue(){
   fetch('/api/queue').then(r=>r.json()).then(j=>{
     LAST_QUEUE_TASKS = j.tasks || [];
+    renderFleetSummary(j);
     loadRunInspector();
     // Update queue-level ETA in section header
     const hdr = document.getElementById('queue-eta-hdr');

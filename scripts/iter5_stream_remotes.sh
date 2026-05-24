@@ -69,6 +69,7 @@ while true; do
   sync_box 15229 ssh3.vast.ai          $MIRROR/ssh3_3070         &
   sync_box 16779 ssh6.vast.ai          $MIRROR/ssh6_3080         &
   sync_box 11271 ssh3.vast.ai          $MIRROR/ssh3_3060ti_new   &
+  sync_box 17647 ssh9.vast.ai          $MIRROR/ssh9_4x2060       &
   wait
 
   # summarize_box "ssh3_3060ti " $MIRROR/ssh3_3060ti (KILLED)
@@ -78,6 +79,7 @@ while true; do
   summarize_box "ssh3_3070   " $MIRROR/ssh3_3070
   summarize_box "ssh6_3080   " $MIRROR/ssh6_3080
   summarize_box "ssh3_3060ti " $MIRROR/ssh3_3060ti_new
+  summarize_box "ssh9_4x2060 " $MIRROR/ssh9_4x2060
 
   sleep 300
 done
