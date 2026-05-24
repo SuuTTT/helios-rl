@@ -29,9 +29,9 @@ So the extra objective is not replacing TD-MPC2. It is acting as a regularizer o
 If you want to understand the implementation quickly, read these files in this order:
 
 1. `src/helios/algorithms/tdmpc_glass.py`
-2. `docs/tdmpc-glass/design_doc.md`
+2. `docs/tdmpc-glass/design/design_doc.md`
 3. `docs/tutorial/tdmpc_glass_se_validation.md`
-4. `docs/tdmpc-glass/launch_guide.md`
+4. `docs/tdmpc-glass/operations/launch_guide.md`
 
 What each file does:
 
@@ -389,7 +389,7 @@ That makes TD-MPC-Glass an **auxiliary-structure version of TD-MPC2**, not a com
 If this tutorial made sense, the next two pages to read are:
 
 1. `docs/tutorial/tdmpc_glass_se_validation.md`
-2. `docs/tdmpc-glass/design_doc.md`
+2. `docs/tdmpc-glass/design/design_doc.md`
 
 The first tells you whether the SE part is mathematically sound.
 

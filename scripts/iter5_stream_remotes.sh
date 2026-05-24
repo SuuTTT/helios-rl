@@ -44,9 +44,11 @@ summarize_box() {
     # Skip backup snapshots and diagnostic sidecars
     [[ "$fname" == *_v1_* || "$fname" == *_v[0-9]_* || "$fname" == *_partial_* || "$fname" == *_died_* || "$fname" == *_final_* || "$fname" == *_done_* || "$fname" == *_diag ]] && continue
     local pdir=$(basename "$(dirname "$csv")")
-    # active-phase allowlist for iter 5-6
+    # active-phase allowlist for current and recent phases. Keep this broad:
+    # the dashboard is the main filter, while this stream is just a liveness
+    # console for whatever probes the queue is currently running.
     case "$pdir" in
-      HopperHop_phasex_*|HopperHop_phasey_*|HopperHop_phaseq_*|HopperHop_phasez_*|HopperHop_phasev_*|HopperHop_phasex_ns1024) ;;
+      HopperHop_phase*) ;;
       *) continue;;
     esac
     local phase=$(echo "$pdir" | sed 's/HopperHop_//; s/_remote_3m//; s/_3060ti//; s/_4060//; s/_2x3060//; s/_local//; s/_ns1024/_NS1024/; s/_baseline//; s/_knee//')
@@ -69,6 +71,7 @@ while true; do
   sync_box 15229 ssh3.vast.ai          $MIRROR/ssh3_3070         &
   sync_box 16779 ssh6.vast.ai          $MIRROR/ssh6_3080         &
   sync_box 11271 ssh3.vast.ai          $MIRROR/ssh3_3060ti_new   &
+  sync_box 15665 ssh4.vast.ai          $MIRROR/ssh4_2060_12gb    &
   sync_box 17647 ssh9.vast.ai          $MIRROR/ssh9_4x2060       &
   wait
 
@@ -79,6 +82,7 @@ while true; do
   summarize_box "ssh3_3070   " $MIRROR/ssh3_3070
   summarize_box "ssh6_3080   " $MIRROR/ssh6_3080
   summarize_box "ssh3_3060ti " $MIRROR/ssh3_3060ti_new
+  summarize_box "ssh4_2060   " $MIRROR/ssh4_2060_12gb
   summarize_box "ssh9_4x2060 " $MIRROR/ssh9_4x2060
 
   sleep 300

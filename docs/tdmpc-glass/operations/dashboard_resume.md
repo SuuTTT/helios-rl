@@ -99,8 +99,8 @@ active HopperHop_phase*/seed_*.csv with best/last MPPI. Bold-green if best ≥ 5
 
 ## Where the project context lives (read these first when resuming)
 
-1. `docs/tdmpc-glass/dashboard.md` — hardware fleet table, current top-line results, goals (G1: 5/5 > 500, G2: break 600)
-2. `docs/tdmpc-glass/iteration_6_plan.md` — current iteration: §3 active runs, §6 ref experiments, §7 env-only roadmap
-3. `docs/tdmpc-glass/hardware_req.md` — vast.ai filter criteria when renting new boxes
+1. `docs/tdmpc-glass/operations/dashboard.md` — hardware fleet table, current top-line results, goals (G1: 5/5 > 500, G2: break 600)
+2. `docs/tdmpc-glass/iterations/iteration_6_plan.md` — current iteration: §3 active runs, §6 ref experiments, §7 env-only roadmap
+3. `docs/tdmpc-glass/operations/hardware_req.md` — vast.ai filter criteria when renting new boxes
 4. `docs/agent_multi_gpu_workflow.md` — generalized playbook for using Claude+SSH across multiple boxes
 5. `AGENT_HANDOFF_CONTEXT.md` — most-recent experiment status (older sessions may not have updated it)

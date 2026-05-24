@@ -11,7 +11,7 @@ seed1: when in air, switch between K=6 K=7 (6,7,6,7,6) until it lay and begin to
 
 When watching a rendered rollout MP4 from `scripts/render_glass_rollout.py`, this
 is what to look for. Output for each video should be a short structured note I can
-use to update the iteration_2_lessons document.
+use to update the ../iterations/iteration_2_lessons document.
 
 The MP4 shows 3 episodes back-to-back, each up to 1000 steps. Overlay in the
 top-left corner: a coloured square + text `K={cluster_id}  R={cumulative return}`.

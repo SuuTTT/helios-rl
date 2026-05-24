@@ -328,7 +328,7 @@ def markdown_report(root: Path, discovered_csvs: list[Path], csvs: list[Path], p
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path("exp/tdmpc_glass"))
-    parser.add_argument("--output", type=Path, default=Path("docs/tdmpc-glass/mppi_vs_pi_analysis.md"))
+    parser.add_argument("--output", type=Path, default=Path("docs/tdmpc-glass/analysis/mppi_vs_pi_analysis.md"))
     parser.add_argument("--include-snapshots", action="store_true")
     args = parser.parse_args()
 

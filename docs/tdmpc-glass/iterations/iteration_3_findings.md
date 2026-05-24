@@ -61,7 +61,7 @@ to flip basin choice on the basin-fragile seeds.
 ### 2.2 K=4 stuck downstream (~10/17 seeds, 280-490)
 
 Even K=4 seeds usually plateau around 300-450. The Phase-f seed 1 video
-analysis (see [cluster_to_gait_mapping.md](./cluster_to_gait_mapping.md))
+analysis (see [cluster_to_gait_mapping.md](../analysis/cluster_to_gait_mapping.md))
 showed these seeds converge to a **knee-walk gait** (push off with knee +
 toe, nose drags on ground) instead of the foot-hop the winner uses. The
 Glass partition is fine; the policy/critic just gets stuck in the wrong

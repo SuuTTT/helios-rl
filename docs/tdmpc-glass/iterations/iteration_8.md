@@ -3,8 +3,8 @@
 Date opened: 2026-05-21
 Finalized: 2026-05-22
 Companion docs:
-- `phase_eval_rescore_2026-05-21.md`
-- `mppi_vs_pi_analysis.md`
+- `../analysis/phase_eval_rescore_2026-05-21.md`
+- `../analysis/mppi_vs_pi_analysis.md`
 - `iteration_9.md`
 
 ## Goal

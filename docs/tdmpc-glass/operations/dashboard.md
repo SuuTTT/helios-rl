@@ -60,7 +60,7 @@ Then open `http://localhost:5055`. Auto-refreshes boxes every 30 s and curves ev
 
 ## Phase legend (full iter 1–6)
 
-See `docs/tdmpc-glass/iteration_6_plan.md §0` for the full ledger of all 23+
+See `docs/tdmpc-glass/iterations/iteration_6_plan.md §0` for the full ledger of all 23+
 phases. Quick "what works" summary:
 
 | Intervention | Best | Notes |

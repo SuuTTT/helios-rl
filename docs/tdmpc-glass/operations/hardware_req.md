@@ -25,7 +25,7 @@ What works, what doesn't, what to filter on when renting GPUs for this project.
 | RTX 3060 Ti | 8 GB | 12.x | 12.x | `requirements-rtx3090.txt` (jax cuda12) | ~100 sps (slow but reliable) |
 | 2× RTX 3060 Laptop | 6 GB each | 580 / 13.0 | jax cuda13 | tight — use MEM_FRACTION=0.35 | ~250 sps (with OOM risk) |
 
-**Memory-fraction guidance** (from `docs/tdmpc-glass/env_setup.md`):
+**Memory-fraction guidance** (from `docs/tdmpc-glass/operations/env_setup.md`):
 - 0.85 on 12 GB+ cards
 - 0.55–0.65 on 8 GB cards
 - 0.35 on 6 GB cards when sharing the GPU

@@ -3,7 +3,7 @@
 #
 # Hierarchical Glass smoke test: K_sub=8 fine clusters AND K_super=4 coarse
 # super-clusters trained jointly via two 2D-SE losses on the same prototype
-# graph A. See docs/tdmpc-glass/iteration_4_findings.md §7.5b for design.
+# graph A. See docs/tdmpc-glass/iterations/iteration_4_findings.md §7.5b for design.
 #
 # Knobs vs Phase-p (Path 1, EXPL_UNTIL=500k):
 #   --glass_num_super_clusters   4       ← NEW (Path 10)

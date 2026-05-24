@@ -44,7 +44,7 @@ and 4 stuck below 300).
 - Setting `--act_noise_start 0.40 --act_noise_end 0.40` triggered `Warp CUDA error 901` from `mujoco_warp/_src/solver.py:3303` at ~1M env steps, during `eval_pi` host-sync.
 - Initially blamed solely on noise=0.40; **later refuted by Phase-f seed 2 hitting the same crash with default noise=0.30**.
 - **Refined lesson**: the crash is sporadic — `cudaErrorCapturedEvent` from `wp.capture_while` is a "hopper drifted into a non-converging solver configuration" failure mode that any setup can hit, but noise≥0.40 raises probability dramatically.
-- See [feedback_mjx_warp_901.md](../../../../home/coder/.claude/projects/-root-helios-rl/memory/feedback_mjx_warp_901.md) in the agent memory.
+- See `feedback_mjx_warp_901.md` in the agent memory.
 
 ### 2.3 MPPI horizon H=3 → 5 alone (Phase-d v2, falsified)
 - Throughput dropped 449→397 sps (~20% slower) — expected.
