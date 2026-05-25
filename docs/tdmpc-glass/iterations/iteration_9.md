@@ -992,6 +992,84 @@ Queued:
 - `t6d15d04`: i9t, Phase1b off at 1.5M, hard seed 4.
 - `te511ed4`: i9u, Phase1b off at 3.0M, hard seed 4.
 
+## Latest review, 2026-05-25
+
+Queue state at readout time:
+- `12` running, `8` pending, `8` done, `11` failed.
+- Dashboard, queue daemon, and remote mirror are alive.
+- `ssh6_4060` appears idle in the dashboard only because no queue task is
+  assigned; direct SSH to `ssh6.vast.ai:11115` returns connection refused, so
+  it should be treated as unavailable fleet capacity until the Vast instance is
+  fixed or replaced.
+
+Promising-phase dashboard caveat:
+- The dashboard groups all `phasei9m_*` result directories into canonical
+  `phasei9m` and counts every discovered CSV with eval rows.
+- Therefore `phasei9m max 525.6 · mean 368.7 · G1 3/10` is **not** a completed
+  3/10 seed success rate. It includes failed/interrupted partial CSVs from both
+  the original `p1b_off2m` runs and the fresh `sleep8h` reruns.
+- Treat partial failed rows as signal for promotion/debugging, but do not count
+  them as completed seeds for a G1 claim.
+
+Current promising-family dashboard readout:
+
+| Family | Dashboard max | Mean | G1 count | Active queue | Interpretation |
+|---|---:|---:|---:|---|---|
+| i9m Phase1b off at 2M | 525.6 | 368.7 | 3/10 | 2 running, 5 pending | still interesting, but G1 hits are partial/failed |
+| i9n Phase1b K128 | 579.8 | 419.8 | 2/6 | 3 running, 3 pending | best current breadth candidate if running seeds mature |
+| i9r Phase1b off at 1M | 540.2 | 497.4 | 1/2 | 2 running | very strong early off-schedule signal |
+| i9q temp0.01 + off2M | 558.8 | 394.9 | 1/4 | 2 running | one strong auto-promote; still sparse |
+| phaseq_knee baseline | 557.2 | 387.9 | 4/11 | none | useful non-Glass reference |
+| phasear_restart_K128 | 584.6 | 395.2 | 1/5 | none | high max, not robust |
+| phasez TD-MPC2 baseline | 535.4 | 432.4 | 1/4 | none | baseline can still hit G1 |
+| phaseg2 temp0.05 | 570.6 | 359.0 | 1/5 | none | one winner, not robust |
+
+`phasei9m` detailed readout:
+
+| Variant | Seed | Queue status | best_any | Best step | Last step | Selector | Notes |
+|---|---:|---|---:|---:|---:|---|---|
+| `phasei9m_p1b_off2m` | 1 | no matched active task | 410.4 | 9.50M | 10.00M | mppi | completed local historical run |
+| `phasei9m_p1b_off2m_s2` | 2 | no matched active task | 255.4 | 3.25M | 6.25M | mppi | weak/partial mirror row |
+| `phasei9m_p1b_off2m_s3` | 3 | failed | 263.7 | 3.25M | 6.50M | pi | interrupted/failed |
+| `phasei9m_p1b_off2m_s4` | 4 | failed | 524.1 | 7.75M | 8.00M | mppi | G1 partial, not completed |
+| `phasei9m_p1b_off2m_s5` | 5 | failed | 525.6 | 2.25M | 3.00M | mppi | G1 partial, not completed |
+| `phasei9m_sleep8h_20260524_s1` | 1 | failed | 340.1 | 3.00M | 5.25M | mppi | fresh-tag rerun, partial |
+| `phasei9m_sleep8h_20260524_s2` | 2 | failed | 220.2 | 2.00M | 2.25M | mppi | fresh-tag rerun, weak partial |
+| `phasei9m_sleep8h_20260524_s3` | 3 | failed | 519.2 | 3.25M | 3.50M | mppi | fresh-tag G1 partial |
+| `phasei9m_sleep8h_20260524_s4` | 4 | running | 368.1 | 2.25M | 2.25M | mppi | still running on `ssh6_3080` |
+| `phasei9m_sleep8h_20260524_s5` | 5 | running | 254.9 | 1.00M | 1.25M | mppi | still running on `ssh17637_gpu0` |
+
+Pending `phasei9m` auto-promotes:
+- `t9c3cb49`: seed 6 from `sleep8h_s1`, triggered by fixable failed-run bar
+  (`best_any=340.1`).
+- `t1230ed6`, `t4cb9313`, `t738f024`, `te91c729`: seeds 7-10 from
+  `sleep8h_s3`, triggered by partial G1 (`best_any=519.2`).
+
+Other latest seed-level readouts:
+- i9n: `s2=579.8@3.75M`, `s3=515.3@3.25M`, `s4=476.1@6.50M` on the first
+  hard-seed path, `s4_rerun2=345.0@10.00M`, `s5=335.7@7.75M`, and fresh
+  `sleep8h_s1=261.3@1.50M` still early. This is the current best candidate if
+  the running/pending seeds continue improving.
+- i9r: `s1=540.2@5.00M`, `s4=454.6@5.75M`; off-at-1M is now a serious
+  candidate because it has both a G1 seed and a high hard-seed partial.
+- i9q: `auto_s3=558.8@7.00M`, `s4=405.7@1.50M`, `s1=347.5@5.50M`,
+  `s2=267.6@4.75M`; the hybrid temp-stability/off-at-2M branch has one strong
+  seed but needs more breadth.
+- i9s/i9t off-at-1.5M are still running and not mature enough for a decision.
+
+Updated interpretation:
+- Do not use the dashboard G1 denominator as a final success metric while many
+  failed/interrupted tasks have usable CSVs. For final claims, require complete
+  or deliberately accepted fixed-budget trials under one clean code SHA.
+- i9m remains useful mechanistic evidence for "early Glass, then remove it",
+  but the apparent `3/10` G1 is inflated by partial failed rows.
+- i9n and i9r are now at least as important as i9m. i9n tests whether the
+  Phase1b K128 recipe has enough breadth, while i9r tests whether Glass should
+  turn off earlier than 2M.
+- Next clean confirmation should likely compare three schedules under the same
+  recipe and code SHA: Glass off at 1M (`i9r`), 2M (`i9m`), and always-on K128
+  (`i9n`).
+
 ## Decision rule
 
 If no one-seed probe beats the current hard-seed baseline, finish the pending

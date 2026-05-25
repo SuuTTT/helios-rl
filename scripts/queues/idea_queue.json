@@ -1,0 +1,70 @@
+[
+  {
+    "id": "i088cf77",
+    "status": "probe_designed",
+    "priority": 6,
+    "title": "Clean off-schedule comparison for Phase1b K128",
+    "goal": "Find a HopperHop recipe that can plausibly reach 5/5 G1",
+    "hypothesis": "Current evidence points to early Glass helping representation and late Glass hurting gait refinement; compare off-at-1M, off-at-2M, and always-on under clean tags.",
+    "metric": "Promote if any schedule gives >=2/3 mature seeds over 500 or all sentinel seeds over 380 by 5M.",
+    "notes": "",
+    "tags": [
+      "hopperhop",
+      "glass",
+      "off-schedule",
+      "idea-queue-smoke"
+    ],
+    "owner": "codex",
+    "claimed_by": "codex",
+    "created_at": "2026-05-25T08:53:07Z",
+    "updated_at": "2026-05-25T08:53:08Z",
+    "probe_specs": [
+      {
+        "id": "p76425e2",
+        "status": "designed",
+        "label": "i10a off1m clean seed 1",
+        "launcher": "scripts/run_phasei9_glass_probe.sh",
+        "env": "PROBE_ID=phasei10a_off1m_clean_s1 SEEDS=1 K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=1000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 CODE_SHA=f6ce507-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp",
+        "priority": 9,
+        "pass_rule": "best_any >=500 by 5M or >=380 by 3M with improving diagnostics",
+        "kill_rule": "best_any <100 at 1M with no standing/full-reward progress",
+        "notes": "",
+        "created_at": "2026-05-25T08:53:07Z",
+        "central_task_id": ""
+      }
+    ],
+    "evidence": [
+      {
+        "at": "2026-05-25T08:53:08Z",
+        "by": "codex",
+        "summary": "Created as smoke test for the idea queue. Do not enqueue automatically while current recovery queue is still draining.",
+        "path": "docs/tdmpc-glass/operations/idea_queue.md",
+        "decision": "hold"
+      }
+    ],
+    "events": [
+      {
+        "at": "2026-05-25T08:53:07Z",
+        "event": "created",
+        "by": "codex"
+      },
+      {
+        "at": "2026-05-25T08:53:07Z",
+        "event": "claimed",
+        "by": "codex"
+      },
+      {
+        "at": "2026-05-25T08:53:07Z",
+        "event": "probe_designed",
+        "probe_id": "p76425e2",
+        "label": "i10a off1m clean seed 1"
+      },
+      {
+        "at": "2026-05-25T08:53:08Z",
+        "event": "evidence",
+        "by": "codex",
+        "decision": "hold"
+      }
+    ]
+  }
+]

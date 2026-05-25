@@ -67,6 +67,7 @@ logs/
 # Checkpoints
 checkpoints/
 *.ckpt
+exp/tdmpc_glass/control_backups/
 
 # logs
 logs/
