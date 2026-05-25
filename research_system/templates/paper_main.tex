@@ -1,0 +1,67 @@
+\documentclass[10pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{hyperref}
+
+\title{Paper Title}
+\author{Author Names}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Write the core claim, benchmark, method, and result. Keep this factual until
+the clean confirmation runs are complete.
+\end{abstract}
+
+\section{Introduction}
+
+State the problem, why the benchmark matters, what current SOTA misses, and the
+main contribution.
+
+\section{Related Work}
+
+Summarize the literature table from the deep research report.
+
+\section{Benchmark and Evaluation}
+
+Define tasks, metrics, budgets, seeds, baselines, and invalid-run criteria.
+
+\section{Method}
+
+Describe the implemented idea. Link each component to an ablation.
+
+\section{Experiments}
+
+\subsection{Main Results}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrr}
+\toprule
+Method & Primary Metric & Notes \\
+\midrule
+Baseline & 0.0 & \\
+Ours & 0.0 & \\
+\bottomrule
+\end{tabular}
+\caption{Main benchmark result.}
+\end{table}
+
+\subsection{Ablations}
+
+\subsection{Failure Modes}
+
+\section{Limitations}
+
+\section{Conclusion}
+
+\bibliographystyle{plain}
+\bibliography{refs}
+
+\end{document}
+

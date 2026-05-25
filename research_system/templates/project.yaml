@@ -1,0 +1,66 @@
+# Generic research project manifest.
+# Copy to research/<project>/project.yaml and fill all fields before launching
+# autonomous probes.
+
+project_id: example-project
+title: "Short project title"
+status: idea
+created_at: "2026-05-25"
+owner: human
+
+target:
+  claim: "What result would be publishable?"
+  primary_metric: "metric name"
+  target_value: null
+  target_direction: higher
+  success_criteria: "e.g. 5/5 seeds exceed SOTA under fixed budget"
+  invalid_run_criteria:
+    - "header-only output"
+    - "crashed before first valid eval"
+
+literature:
+  deep_research_report: "research/<project>/deep_research/report.md"
+  bibtex: "research/<project>/deep_research/refs.bib"
+  sota_table: "research/<project>/deep_research/sota_table.csv"
+  benchmark_notes: "research/<project>/deep_research/benchmarks.md"
+
+benchmark:
+  suite_name: ""
+  official_repo: ""
+  official_commit: ""
+  local_wrapper: ""
+  tasks: []
+  datasets: []
+  metrics: []
+  reproduction_status: not_started
+  reproduced_baselines: []
+
+environment:
+  docker_image: ""
+  python_version: ""
+  cuda_version: ""
+  setup_doc: ""
+
+queues:
+  idea_queue: "scripts/queues/idea_queue.json"
+  run_queue: "scripts/queues/central_queue.json"
+  publication_queue: "scripts/queues/publication_queue.json"
+
+storage:
+  github_repo: ""
+  wandb_project: ""
+  s3_prefix: ""
+  hf_repo: ""
+  github_pages_path: ""
+
+publication:
+  blog_dir: "research/<project>/blog"
+  paper_dir: "research/<project>/paper"
+  manuscript_status: not_started
+  target_venue: ""
+
+current_decision:
+  summary: ""
+  next_action: ""
+  blockers: []
+

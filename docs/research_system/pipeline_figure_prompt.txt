@@ -1,0 +1,80 @@
+Create a clean, high-resolution technical workflow diagram for a research automation platform. Use a modern academic systems style, light background, crisp vector-like shapes, restrained colors, and clear labels. The diagram should show the entire research loop from idea to publication.
+
+Canvas: wide 16:9 landscape, suitable for a research blog and paper overview figure. Use readable text, no tiny labels. Avoid decorative gradients or abstract blobs. Use arrows with clear direction. Make it feel like an engineering architecture diagram, not a marketing graphic.
+
+Main title at top: "Research Operating System: Idea to SOTA to Publication"
+
+Layout: left-to-right pipeline with feedback loops.
+
+Left column: "Human Researcher"
+- box: "Idea / Hypothesis"
+- small notes: "target metric, constraints, venue"
+
+Next column: "Deep Research Intake"
+- box: "GPT Deep Research Report"
+- box: "SOTA Table + Benchmark Map"
+- icons or small labels for papers, repos, metrics, datasets
+
+Next column: "Project Workspace"
+- box: "Clone Official Benchmarks"
+- box: "Reproduce Baselines"
+- box: "Fast Local Reimplementation"
+- box: "Docker / GHCR Environment"
+- show GitHub as code/config source
+
+Center column, larger: "Research Control Plane on EC2"
+Inside it include stacked modules:
+- "Idea Queue"
+- "Agent Planner"
+- "Central Run Queue"
+- "Dashboard"
+- "Evidence Store"
+- "Publication Queue"
+Add a small lock or warning label: "one queue master"
+
+Below center: "Storage and Artifacts"
+Show connected storage nodes:
+- "GitHub: code/docs/configs"
+- "W&B: metrics"
+- "S3/B2: backups + resume checkpoints"
+- "Hugging Face: final checkpoints"
+- "GitHub Pages: blog"
+- "LaTeX: manuscript"
+
+Right column: "Compute Fleet"
+Show multiple worker boxes:
+- "VastAI GPUs"
+- "EC2 GPUs"
+- "Local GPUs"
+- "CPU analysis workers"
+Each worker receives tasks from Central Run Queue and returns "CSV / logs / checkpoints / videos"
+
+Far right column: "Research Outputs"
+- box: "Benchmark Built"
+- box: "SOTA Beaten"
+- box: "Ablations + Robust Seeds"
+- box: "Blog Post"
+- box: "Paper Draft"
+- box: "Release"
+
+Feedback loops:
+- From Evidence Store back to Agent Planner labeled "analyze, promote, mutate, retire"
+- From Dashboard back to Human Researcher labeled "approve claims and next direction"
+- From Publication Queue back to Project Workspace labeled "figures, tables, reproducibility checklist"
+
+Use color coding:
+- blue for control plane
+- green for successful evidence/results
+- amber for ideas/probes
+- gray for storage
+- purple sparingly for publication
+
+Include small status chips inside the control plane:
+- "new"
+- "triage"
+- "probe"
+- "running"
+- "confirmed"
+
+Do not include people photos or decorative robot characters. Do not use 3D. Keep typography clean and professional.
+
