@@ -32,14 +32,12 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 # (tag, port, host, gpu_idx)  port=None/host=None means local execution
 BOXES = [
     ("local",         None,    None,             0),
-    ("ssh6_4060",     11115,  "ssh6.vast.ai",   0),
     ("ssh17637_gpu0", 17637,  "78.83.187.54",   0),
     ("ssh17637_gpu1", 17637,  "78.83.187.54",   1),
     ("ssh1_2080ti",   34217,  "ssh1.vast.ai",   0),
     ("ssh3_3070",     15229,  "ssh3.vast.ai",   0),
     ("ssh6_3080",     16779,  "ssh6.vast.ai",   0),
-    ("ssh3_3060ti",   11271,  "ssh3.vast.ai",   0),
-    ("ssh4_8080",     15665,  "ssh4.vast.ai",   0),
+    ("ssh5_3060_bar", 27233,  "ssh5.vast.ai",   0),
     ("ssh9_2060_gpu0", 17647, "ssh9.vast.ai",   0),
     ("ssh9_2060_gpu1", 17647, "ssh9.vast.ai",   1),
     ("ssh9_2060_gpu2", 17647, "ssh9.vast.ai",   2),
@@ -49,14 +47,12 @@ BOXES = [
 # Per-box XLA_MEM override used when env doesn't already specify it.
 DEFAULT_MEM = {
     "local":         "0.85",
-    "ssh6_4060":     "0.65",
     "ssh17637_gpu0": "0.35",
     "ssh17637_gpu1": "0.35",
     "ssh1_2080ti":   "0.75",
     "ssh3_3070":     "0.55",
     "ssh6_3080":     "0.65",
-    "ssh3_3060ti":   "0.55",
-    "ssh4_8080":      "0.65",
+    "ssh5_3060_bar":  "0.65",
     "ssh9_2060_gpu0": "0.35",
     "ssh9_2060_gpu1": "0.35",
     "ssh9_2060_gpu2": "0.35",

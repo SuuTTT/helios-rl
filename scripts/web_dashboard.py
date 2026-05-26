@@ -47,14 +47,14 @@ SSH_OPTS = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=ye
 BOXES = [
     # (tag, port, host, gpu_idx, label)
     ("local",         None,    None,             0, "Local 4070 Ti (12GB)"),
-    ("ssh6_4060",     11115,   "ssh6.vast.ai",   0, "ssh6:11115 4060 (8GB)"),
     ("ssh17637_gpu0", 17637,   "78.83.187.54",   0, "78.83.187.54 GPU0 3060Lap (6GB)"),
     ("ssh17637_gpu1", 17637,   "78.83.187.54",   1, "78.83.187.54 GPU1 3060Lap (6GB)"),
     ("ssh1_2080ti",   34217,   "ssh1.vast.ai",   0, "ssh1:34217 2080 Ti (22GB)"),
     ("ssh3_3070",     15229,   "ssh3.vast.ai",   0, "ssh3:15229 3070 (8GB)"),
     ("ssh6_3080",     16779,   "ssh6.vast.ai",   0, "ssh6:16779 3080 (10GB)"),
-    ("ssh3_3060ti",   11271,   "ssh3.vast.ai",   0, "ssh3:11271 3060Ti (8GB)"),
     ("ssh4_8080",     15665,   "ssh4.vast.ai",   0, "ssh4:15665 GPU0"),
+    ("ssh5_3060_bar", 27233,   "ssh5.vast.ai",   0, "ssh5:27233 3060 (12GB, bar)"),
+    ("ssh4_3060_bar", 27665,   "ssh4.vast.ai",   0, "ssh4:27665 3060 (12GB, CUDA13 bar)"),
     ("ssh9_2060_gpu0", 17647,  "ssh9.vast.ai",   0, "ssh9:17647 2060 GPU0 (6GB)"),
     ("ssh9_2060_gpu1", 17647,  "ssh9.vast.ai",   1, "ssh9:17647 2060 GPU1 (6GB)"),
     ("ssh9_2060_gpu2", 17647,  "ssh9.vast.ai",   2, "ssh9:17647 2060 GPU2 (6GB)"),
@@ -66,10 +66,10 @@ BOXES = [
 RENDER_MEM_FRACTION = {
     "ssh17637_gpu0": "0.75",
     "ssh17637_gpu1": "0.75",
-    "ssh6_4060": "0.70",
-    "ssh3_3060ti": "0.55",
     "ssh3_3070": "0.55",
     "ssh4_8080": "0.65",
+    "ssh5_3060_bar": "0.65",
+    "ssh4_3060_bar": "0.65",
     "ssh6_3080": "0.65",
     "ssh1_2080ti": "0.75",
     "ssh9_2060_gpu0": "0.35",
@@ -148,6 +148,7 @@ PHASE_NOTES: dict[str, str] = {
     # Iter 10 - clean confirmations from Iter 9 handoff signal
     "phasei10a": "Clean confirmation: Phase1b Glass handoff, off after 1M; tests 5/5 G1 candidate",
     "phasei10b": "Clean confirmation: Phase1b Glass handoff, off after 1.5M; tests midpoint handoff robustness",
+    "phasei10c": "Fresh clean 5-seed confirmation: Phase1b Glass handoff, off after 1M; reruns away from interrupted/unstable boxes",
     # Smoke tests
     "smoke":        "Smoke test (hardware validation only)",
 }
@@ -552,16 +553,18 @@ def eval_summary(csv_path):
 
 
 MIN_COUNTED_RESULT_STEPS = 4_000_000
+PROMISING_EARLY_REWARD = 500.0
 
 
 def eval_is_countable(summary: dict, min_steps: int = MIN_COUNTED_RESULT_STEPS) -> bool:
     """Return True once a run is mature enough for aggregate phase statistics.
 
     Short interrupted runs are useful for debugging, but they should not change
-    phase means, G1 rates, or promising-phase ranking.
+    phase means, G1 rates, or promising-phase ranking unless they already cross
+    the G1 bar. Early G1s are useful signal and should remain visible.
     """
     last_step = max(summary.get("last_pi_step") or -1, summary.get("last_mppi_step") or -1)
-    return last_step >= min_steps
+    return last_step >= min_steps or (summary.get("best_any") or -1) >= PROMISING_EARLY_REWARD
 
 
 def _fmt_metric(v):
