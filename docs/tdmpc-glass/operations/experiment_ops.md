@@ -68,11 +68,17 @@ The `run_benchmark.py` launcher scripts set these automatically.
 | `ssh3_3070` | `ssh3.vast.ai:15229` | 3070 | 8 GB | 0.75 | |
 | `ssh6_3080` | `ssh6.vast.ai:16779` | 3080 | 10 GB | 0.75 | |
 | `ssh3_3060ti` | `ssh3.vast.ai:11271` | 3060 Ti | 8 GB | 0.65 | |
-| `ssh4_8080` | `ssh4.vast.ai:15665` | 2060 | 12 GB | 0.65 | active; `/root/venv` uses JAX CUDA 13 on driver 580.126.09; daemon injects low-thread XLA env because `pids.max=256`; connect with `ssh -p 15665 root@ssh4.vast.ai -L 8080:localhost:8080` |
 | `ssh9_2060_gpu0` | `ssh9.vast.ai:17647` | 2060 (slot 0) | 6 GB | 0.35 | 4-GPU box |
 | `ssh9_2060_gpu1` | `ssh9.vast.ai:17647` | 2060 (slot 1) | 6 GB | 0.35 | 4-GPU box |
 | `ssh9_2060_gpu2` | `ssh9.vast.ai:17647` | 2060 (slot 2) | 6 GB | 0.35 | 4-GPU box |
 | `ssh9_2060_gpu3` | `ssh9.vast.ai:17647` | 2060 (slot 3) | 6 GB | 0.35 | 4-GPU box |
+
+Removed workers:
+
+| Tag | Contract | Reason |
+|---|---:|---|
+| `ssh4_8080` | `37565664` | destroyed after repeated PJRT pthread creation failures; cgroup `pids.max=256` is too low for this JAX workload |
+| `ssh4_3060_bar` | `37907664` | destroyed after repeated SSH banner timeouts and broken `rsync` during setup |
 
 **Tip**: the dashboard Box Fleet section shows live GPU%, mem, CPU%, running seed,
 best MPPI, ETA. Check there before SSHing.

@@ -421,7 +421,13 @@
     "started_at": "2026-05-25T12:47:47Z",
     "ended_at": "2026-05-26T01:47:34Z",
     "auto_parent": "t8c64b2b",
-    "auto_reason": "best_any=340.1 status=failed add_count=1"
+    "auto_reason": "best_any=340.1 status=failed add_count=1",
+    "destroyed_box": {
+      "box": "ssh4_8080",
+      "vast_contract_id": 37565664,
+      "destroyed_at": "2026-05-26T14:03:18Z",
+      "reason": "user_destroyed_after_repeated_PJRT_pthread_creation_failures"
+    }
   },
   {
     "id": "t1230ed6",
@@ -626,7 +632,14 @@
       "at": "2026-05-26T06:49:58Z",
       "skip_reason": "failed_before_4000000_steps",
       "last_step": 1250048
-    }
+    },
+    "destroyed_box": {
+      "box": "ssh4_8080",
+      "vast_contract_id": 37565664,
+      "destroyed_at": "2026-05-26T14:03:18Z",
+      "reason": "user_destroyed_after_repeated_PJRT_pthread_creation_failures"
+    },
+    "failure_reason": "ssh4_8080_pjrt_thread_limit_or_box_destroyed"
   },
   {
     "id": "te295d56",
@@ -648,7 +661,14 @@
       "at": "2026-05-26T09:28:03Z",
       "skip_reason": "failed_before_4000000_steps",
       "last_step": 1250048
-    }
+    },
+    "destroyed_box": {
+      "box": "ssh4_8080",
+      "vast_contract_id": 37565664,
+      "destroyed_at": "2026-05-26T14:03:18Z",
+      "reason": "user_destroyed_after_repeated_PJRT_pthread_creation_failures"
+    },
+    "failure_reason": "ssh4_8080_pjrt_thread_limit_or_box_destroyed"
   },
   {
     "id": "t3d1b304",
@@ -740,7 +760,14 @@
       "at": "2026-05-26T11:04:13Z",
       "skip_reason": "failed_before_4000000_steps",
       "last_step": 750080
-    }
+    },
+    "destroyed_box": {
+      "box": "ssh4_8080",
+      "vast_contract_id": 37565664,
+      "destroyed_at": "2026-05-26T14:03:18Z",
+      "reason": "user_destroyed_after_repeated_PJRT_pthread_creation_failures"
+    },
+    "failure_reason": "ssh4_8080_pjrt_thread_limit_or_box_destroyed"
   },
   {
     "id": "t48fe2b3",
@@ -825,5 +852,80 @@
     "ended_at": null,
     "auto_parent": "ta90d285",
     "auto_reason": "best_any=551.7 status=done add_count=2"
+  },
+  {
+    "id": "ta844e30",
+    "label": "phasei10d long off1m 12M seed 1 87a4337-dirty (>8h confirm)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei10d_off1m_long12m K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=1000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TOTAL_STEPS=12000000 EARLY_STOP_PATIENCE=0 CODE_SHA=87a4337-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp SEEDS=1",
+    "priority": 13,
+    "status": "pending",
+    "box": null,
+    "created_at": "2026-05-26T14:07:05Z",
+    "started_at": null,
+    "ended_at": null,
+    "probe_family": "phasei10d_off1m_long12m",
+    "counting_rule": "ignore failed/interrupted runs before 4M unless best_any >= 500; long 12M cap, early-stop disabled",
+    "run_budget": "12M steps; expected to exceed 8h on slower workers"
+  },
+  {
+    "id": "t5470379",
+    "label": "phasei10d long off1m 12M seed 2 87a4337-dirty (>8h confirm)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei10d_off1m_long12m K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=1000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TOTAL_STEPS=12000000 EARLY_STOP_PATIENCE=0 CODE_SHA=87a4337-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp SEEDS=2",
+    "priority": 13,
+    "status": "pending",
+    "box": null,
+    "created_at": "2026-05-26T14:07:05Z",
+    "started_at": null,
+    "ended_at": null,
+    "probe_family": "phasei10d_off1m_long12m",
+    "counting_rule": "ignore failed/interrupted runs before 4M unless best_any >= 500; long 12M cap, early-stop disabled",
+    "run_budget": "12M steps; expected to exceed 8h on slower workers"
+  },
+  {
+    "id": "tc0573f4",
+    "label": "phasei10d long off1m 12M seed 3 87a4337-dirty (>8h confirm)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei10d_off1m_long12m K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=1000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TOTAL_STEPS=12000000 EARLY_STOP_PATIENCE=0 CODE_SHA=87a4337-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp SEEDS=3",
+    "priority": 13,
+    "status": "pending",
+    "box": null,
+    "created_at": "2026-05-26T14:07:05Z",
+    "started_at": null,
+    "ended_at": null,
+    "probe_family": "phasei10d_off1m_long12m",
+    "counting_rule": "ignore failed/interrupted runs before 4M unless best_any >= 500; long 12M cap, early-stop disabled",
+    "run_budget": "12M steps; expected to exceed 8h on slower workers"
+  },
+  {
+    "id": "tafbc257",
+    "label": "phasei10d long off1m 12M seed 4 87a4337-dirty (>8h confirm)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei10d_off1m_long12m K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=1000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TOTAL_STEPS=12000000 EARLY_STOP_PATIENCE=0 CODE_SHA=87a4337-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp SEEDS=4",
+    "priority": 13,
+    "status": "pending",
+    "box": null,
+    "created_at": "2026-05-26T14:07:05Z",
+    "started_at": null,
+    "ended_at": null,
+    "probe_family": "phasei10d_off1m_long12m",
+    "counting_rule": "ignore failed/interrupted runs before 4M unless best_any >= 500; long 12M cap, early-stop disabled",
+    "run_budget": "12M steps; expected to exceed 8h on slower workers"
+  },
+  {
+    "id": "t6b71cd3",
+    "label": "phasei10d long off1m 12M seed 5 87a4337-dirty (>8h confirm)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei10d_off1m_long12m K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=1000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TOTAL_STEPS=12000000 EARLY_STOP_PATIENCE=0 CODE_SHA=87a4337-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp SEEDS=5",
+    "priority": 13,
+    "status": "pending",
+    "box": null,
+    "created_at": "2026-05-26T14:07:05Z",
+    "started_at": null,
+    "ended_at": null,
+    "probe_family": "phasei10d_off1m_long12m",
+    "counting_rule": "ignore failed/interrupted runs before 4M unless best_any >= 500; long 12M cap, early-stop disabled",
+    "run_budget": "12M steps; expected to exceed 8h on slower workers"
   }
 ]

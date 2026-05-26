@@ -1075,3 +1075,30 @@ Updated interpretation:
 If no one-seed probe beats the current hard-seed baseline, finish the pending
 Iteration 8 Phase-g2 readout and pivot from "new losses" to "basin-entry
 mechanism": restart semantics, exploration schedule, and actor/planner coupling.
+
+## Queue update, 2026-05-26
+
+Fleet cleanup:
+- `ssh4_8080` / Vast contract `37565664` was destroyed after repeated PJRT
+  pthread creation failures. Do not rent similar JAX workers unless
+  `pids.max >= 512` or `max`.
+- `ssh4_3060_bar` / contract `37907664` was destroyed after SSH banner
+  timeouts and broken `rsync` during setup.
+- The dashboard, queue daemon, and stream registry were updated to remove those
+  workers.
+
+Long-run support:
+- `scripts/run_phasei9_glass_probe.sh` now accepts `TOTAL_STEPS` and
+  `EARLY_STOP_PATIENCE`.
+- Default remains `10M` steps with `3M` early-stop patience.
+- Long confirmation tasks can set `TOTAL_STEPS=12000000` and
+  `EARLY_STOP_PATIENCE=0`, allowing runs to continue past 8 hours on slower
+  workers.
+
+New queued phase:
+- `phasei10d_off1m_long12m`, seeds 1-5, priority 13.
+- Recipe: Phase1b-style Glass, K128, exploration until 25k, Glass warmup 100k,
+  Glass decay/off at 1M, no temp-stability, no latent smooth, 12M cap, early
+  stop disabled.
+- Purpose: clean long confirmation of the current strongest off-at-1M handoff
+  hypothesis after `phasei10c` drains.

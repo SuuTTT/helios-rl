@@ -187,26 +187,6 @@ def launch_task(task: dict, tag: str, port: int, host: str):
     mem_key = "XLA_PYTHON_CLIENT_MEM_FRACTION"
     if mem_key not in env:
         env = f"{env} {mem_key}={DEFAULT_MEM.get(tag, '0.65')}"
-    if tag == "ssh4_8080":
-        # ssh4's Vast image has a tight cgroup pids.max=256. JAX/XLA can abort
-        # during compile if it tries to create the default host thread pool.
-        env_map = parse_env(env)
-        for key in (
-            "TF_NUM_INTRAOP_THREADS",
-            "TF_NUM_INTEROP_THREADS",
-            "OMP_NUM_THREADS",
-            "OPENBLAS_NUM_THREADS",
-            "MKL_NUM_THREADS",
-            "NUMEXPR_NUM_THREADS",
-        ):
-            env_map.setdefault(key, "1")
-        xla_flags = env_map.get("XLA_FLAGS", "--xla_gpu_autotune_level=0")
-        for flag in ("--xla_cpu_multi_thread_eigen=false", "intra_op_parallelism_threads=1"):
-            if flag not in xla_flags:
-                xla_flags = f"{xla_flags} {flag}"
-        env_map["XLA_FLAGS"] = xla_flags
-        env = format_env(env_map)
-
     log(f"{tag} → launching task {task['id']}: {task['label']}")
 
     if tag == "local":

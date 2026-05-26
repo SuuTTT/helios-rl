@@ -35,6 +35,7 @@ def build_query(args: argparse.Namespace) -> str:
         f"dph < {args.max_dph}",
         f"dlperf_usd > {args.min_dlperf_usd}",
         f"gpu_ram >= {args.min_gpu_ram}",
+        f"disk_space >= {args.min_disk_space}",
         f"reliability > {args.min_reliability}",
         f"direct_port_count >= {args.min_ports}",
     ]
@@ -78,6 +79,8 @@ def search(args: argparse.Namespace) -> list[dict[str, Any]]:
         dlusd = row.get("dlperf_per_dphtotal", row.get("dlperf_usd"))
         if dph is None or dlusd is None:
             continue
+        if float(row.get("disk_space", 0.0) or 0.0) < args.min_disk_space:
+            continue
         if float(dph) < args.max_dph and float(dlusd) > args.min_dlperf_usd:
             filtered.append(row)
     return filtered
@@ -88,6 +91,7 @@ def main() -> int:
     ap.add_argument("--max-dph", type=float, default=0.10, help="maximum total $/hour")
     ap.add_argument("--min-dlperf-usd", type=float, default=200.0, help="minimum DLPerf/$")
     ap.add_argument("--min-gpu-ram", type=float, default=8.0, help="minimum GPU RAM in GB")
+    ap.add_argument("--min-disk-space", type=float, default=50.0, help="minimum host disk GB")
     ap.add_argument("--min-reliability", type=float, default=0.95)
     ap.add_argument("--min-ports", type=int, default=2)
     ap.add_argument("--min-cuda", type=float, default=13.0)

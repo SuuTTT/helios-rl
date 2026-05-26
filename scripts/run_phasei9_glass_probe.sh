@@ -17,6 +17,8 @@ export MUJOCO_GL=${MUJOCO_GL:-egl}
 
 PROBE_ID=${PROBE_ID:-phasei9_glass_probe}
 SEEDS=${SEEDS:-1}
+TOTAL_STEPS=${TOTAL_STEPS:-10000000}
+EARLY_STOP_PATIENCE=${EARLY_STOP_PATIENCE:-3000000}
 K_UPDATE=${K_UPDATE:-128}
 MPPI_NS=${MPPI_NS:-2048}
 EXPL_UNTIL=${EXPL_UNTIL:-500000}
@@ -42,6 +44,7 @@ status=0
   echo "[${PROBE_ID}] git_sha=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   echo "[${PROBE_ID}] code_sha_env=${CODE_SHA:-unset}"
   echo "[${PROBE_ID}] output_tag=${TDMPC_GLASS_OUTPUT_TAG}"
+  echo "[${PROBE_ID}] total_steps=${TOTAL_STEPS} early_stop_patience=${EARLY_STOP_PATIENCE}"
   echo "[${PROBE_ID}] K=${K_UPDATE} NS=${MPPI_NS} expl_until=${EXPL_UNTIL}"
   echo "[${PROBE_ID}] temp_stability=${TEMP_STABILITY} glass_warmup=${GLASS_WARMUP} glass_decay=${GLASS_DECAY}"
   echo "[${PROBE_ID}] proto_temp=${PROTO_TEMP} assign_scale=${ASSIGN_SCALE} stopgrad=${STOPGRAD}"
@@ -54,7 +57,7 @@ for seed in $SEEDS; do
   python3 -u scripts/run_benchmark.py \
     --algos tdmpc-glass \
     --tasks HopperHop \
-    --total_steps 10000000 \
+    --total_steps "$TOTAL_STEPS" \
     --seed "$seed" \
     --k_update "$K_UPDATE" \
     --mppi_n_samples "$MPPI_NS" \
@@ -67,7 +70,7 @@ for seed in $SEEDS; do
     --glass_assign_logits_init_scale "$ASSIGN_SCALE" \
     --glass_stopgrad_graph "$STOPGRAD" \
     --glass_lambda_temp_stability "$TEMP_STABILITY" \
-    --early_stop_patience 3000000 \
+    --early_stop_patience "$EARLY_STOP_PATIENCE" \
     --no_plot 2>&1 | tee -a "$log"
   seed_status=${PIPESTATUS[0]}
   if [[ "$seed_status" -ne 0 ]]; then

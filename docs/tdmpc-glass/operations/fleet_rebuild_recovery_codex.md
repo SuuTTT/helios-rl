@@ -27,7 +27,7 @@ Remote SSH reachability:
 | `ssh3_3070` | RTX 3070 8 GB | reachable | no run process | keep if cheap |
 | `ssh6_3080` | RTX 3080 10 GB | refused | gone | recycle/re-rent |
 | `ssh3_3060ti` | RTX 3060 Ti 8 GB | reachable | no run process | keep only if cheap |
-| `ssh4_8080` | RTX 2060 12 GB | reachable | no run process | keep only if very cheap |
+| `ssh4_8080` | RTX 2060 12 GB | destroyed | PJRT pthread failures | reject future low-`pids.max` boxes |
 | `ssh9_2060_gpu0-3` | 4x RTX 2060 6 GB | reachable | no run process | marginal, memory constrained |
 
 Immediate interpretation: the queue ledger is stale. Do not restart the queue
@@ -62,7 +62,7 @@ Reject immediately:
 - `jax.devices()` returns CPU only.
 - Disk under 50 GB.
 - 6 GB cards unless price is extremely low and task uses conservative memory.
-- Containers with `pids.max < 512` unless thread-heavy services can be stopped.
+- Containers with `pids.max < 512`; `ssh4_8080` had `pids.max=256` and failed with PJRT pthread creation errors.
 
 ### Price/SPS Bars
 
@@ -75,7 +75,7 @@ Approximate known throughput from current runs:
 | RTX 3070/3080 | unknown/currently useful | <= $0.25/hr | $0.35/hr | keep if stable |
 | RTX 2080 Ti 22 GB | unknown | <= $0.20/hr | $0.30/hr | large VRAM, older arch |
 | RTX 3060 Ti 8 GB | ~100 | <= $0.08/hr | $0.12/hr | slow but stable fallback |
-| RTX 2060 12 GB | usable but thread-sensitive | <= $0.08/hr | $0.12/hr | OK for cheap probes |
+| RTX 2060 12 GB | usable only if cgroup/thread limits pass | <= $0.08/hr | $0.12/hr | reject if `pids.max < 512` |
 | 6 GB multi-2060 / laptop 3060 | 200-250 but OOM risk | <= $0.05/hr/GPU | $0.08/hr/GPU | only low-memory probes |
 
 Decision bar:

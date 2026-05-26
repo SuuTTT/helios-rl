@@ -52,9 +52,7 @@ BOXES = [
     ("ssh1_2080ti",   34217,   "ssh1.vast.ai",   0, "ssh1:34217 2080 Ti (22GB)"),
     ("ssh3_3070",     15229,   "ssh3.vast.ai",   0, "ssh3:15229 3070 (8GB)"),
     ("ssh6_3080",     16779,   "ssh6.vast.ai",   0, "ssh6:16779 3080 (10GB)"),
-    ("ssh4_8080",     15665,   "ssh4.vast.ai",   0, "ssh4:15665 GPU0"),
     ("ssh5_3060_bar", 27233,   "ssh5.vast.ai",   0, "ssh5:27233 3060 (12GB, bar)"),
-    ("ssh4_3060_bar", 27665,   "ssh4.vast.ai",   0, "ssh4:27665 3060 (12GB, CUDA13 bar)"),
     ("ssh9_2060_gpu0", 17647,  "ssh9.vast.ai",   0, "ssh9:17647 2060 GPU0 (6GB)"),
     ("ssh9_2060_gpu1", 17647,  "ssh9.vast.ai",   1, "ssh9:17647 2060 GPU1 (6GB)"),
     ("ssh9_2060_gpu2", 17647,  "ssh9.vast.ai",   2, "ssh9:17647 2060 GPU2 (6GB)"),
@@ -67,9 +65,7 @@ RENDER_MEM_FRACTION = {
     "ssh17637_gpu0": "0.75",
     "ssh17637_gpu1": "0.75",
     "ssh3_3070": "0.55",
-    "ssh4_8080": "0.65",
     "ssh5_3060_bar": "0.65",
-    "ssh4_3060_bar": "0.65",
     "ssh6_3080": "0.65",
     "ssh1_2080ti": "0.75",
     "ssh9_2060_gpu0": "0.35",
@@ -149,6 +145,7 @@ PHASE_NOTES: dict[str, str] = {
     "phasei10a": "Clean confirmation: Phase1b Glass handoff, off after 1M; tests 5/5 G1 candidate",
     "phasei10b": "Clean confirmation: Phase1b Glass handoff, off after 1.5M; tests midpoint handoff robustness",
     "phasei10c": "Fresh clean 5-seed confirmation: Phase1b Glass handoff, off after 1M; reruns away from interrupted/unstable boxes",
+    "phasei10d": "Long clean confirmation: Phase1b Glass handoff, off after 1M; 12M cap and patience disabled for >8h runs",
     # Smoke tests
     "smoke":        "Smoke test (hardware validation only)",
 }

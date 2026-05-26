@@ -31,8 +31,8 @@ Active tasks:
 | `ssh6_3080` | `phasei9q_p1b_temp001_off2m_s4_auto_s3_auto_s10_auto_s4 seed 4` |
 
 `ssh4_8080` attempted `phasei10a` and `phasei10b` jobs, but both failed with
-PJRT pthread creation errors. Treat this box as unsuitable for this workload
-unless the process/thread limit is fixed.
+PJRT pthread creation errors. The instance was destroyed after confirming
+`pids.max=256`, which is below the TD-MPC/JAX safety bar.
 
 ## Cost/SPS Table
 
@@ -49,7 +49,7 @@ slot table, plus aggregate rows below.
 | `ssh3_3070` | RTX 3070 | 0.0756 | 217.4 | 146 | 1932 | running | Keep. Above bar; not fastest, but acceptable. |
 | `ssh6_3080` | RTX 3080 | 0.0756 | 356.7 | 139 | 1840 | running | Keep. Strong DLPerf/$; current SPS is likely workload/phase limited. |
 | `ssh3_3060ti` | RTX 3060 Ti | 0.0837 | 164.6 | 4-6 | ~60 | broken/running | Shut down. GPU is not visible to NVIDIA driver; run is crawling on CPU. |
-| `ssh4_8080` | RTX 2060 12GB | 0.0556 | 70.9 | 137 before crash | 2466 before crash | idle/unstable | Do not queue more work; shut down unless thread-limit fix is needed for debugging. |
+| `ssh4_8080` | RTX 2060 12GB | 0.0556 | 70.9 | 137 before crash | 2466 before crash | destroyed | Reject future boxes with `pids.max < 512` or PJRT pthread failures. |
 | `ssh9_2060_gpu0` | RTX 2060 | 0.0423 | 74.7 | 96 | 2269 | running | Keep until current 4-GPU batch finishes; good actual cost/SPS despite poor DLPerf/$. |
 | `ssh9_2060_gpu1` | RTX 2060 | 0.0423 | 74.7 | 107 | 2529 | running | Same as GPU0. |
 | `ssh9_2060_gpu2` | RTX 2060 | 0.0423 | 74.7 | 110 | 2600 | running | Same as GPU0. |
@@ -90,7 +90,7 @@ Notes:
 - A first attempt rented two RTX 3060 offers with 50GB disks, but their total-cost DLPerf/$ fell below 200 after storage pricing. Those contracts were destroyed and replaced.
 - `37907233` / `ssh5_3060_bar` was successfully bootstrapped and verified with `jax.devices() == [CudaDevice(id=0)]`.
 - `37907664` / `ssh4_3060_bar` was destroyed and must not be re-rented.
-- `ssh4_8080` is also disabled from dispatch because it repeatedly hit PJRT thread creation failures.
+- `ssh4_8080` / contract `37565664` was destroyed by the user and disabled from dispatch because it repeatedly hit PJRT thread creation failures.
 
 Keep:
 
@@ -131,8 +131,16 @@ Suggested hunter policy:
 3. Require `gpu_ram >= 8`, `cuda_vers >= 13.0`, `reliability > 0.95`, `direct_port_count >= 2`.
 4. Price with the intended storage size. Default hunter storage is now `50GB`, because CUDA/JAX wheels plus repo/playground/checkpoints make `20GB` fragile.
 5. Exclude known unstable offers. Current hard exclusion: offer `34624617` / contract `37907664`.
-6. Avoid boxes that cannot complete a small setup transfer and `jax.devices()` verification within a few minutes, regardless of DLPerf/$.
-7. After launch, run a 10-15 minute smoke probe and record actual TD-MPC SPS.
-8. Keep an instance only if either:
+6. Reject boxes with a low process/thread cgroup limit:
+
+```bash
+ssh -p <port> root@<host> 'cat /sys/fs/cgroup/pids.max 2>/dev/null || cat /sys/fs/cgroup/pids/pids.max 2>/dev/null || true'
+```
+
+Reject values below `512`; `ssh4_8080` reported `256` and failed with
+`Thread pjrt_async_work_runner creation via pthread_create() failed`.
+7. Avoid boxes that cannot complete a small setup transfer and `jax.devices()` verification within a few minutes, regardless of DLPerf/$.
+8. After launch, run a 10-15 minute smoke probe and record actual TD-MPC SPS.
+9. Keep an instance only if either:
    - `DLPerf/$ >= 200` and TD-MPC SPS is competitive, or
    - actual aggregate TD-MPC `SPS/$h` is exceptional and stable.
