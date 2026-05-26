@@ -145,6 +145,9 @@ PHASE_NOTES: dict[str, str] = {
     "phasei9s": "Phase1b with Glass off after 1.5M; midpoint handoff between i9r and i9q",
     "phasei9t": "Phase1b off after 1.5M on hard seed 4; stress-test midpoint handoff",
     "phasei9u": "Phase1b off after 3M on hard seed 4; tests longer Glass guidance before handoff",
+    # Iter 10 - clean confirmations from Iter 9 handoff signal
+    "phasei10a": "Clean confirmation: Phase1b Glass handoff, off after 1M; tests 5/5 G1 candidate",
+    "phasei10b": "Clean confirmation: Phase1b Glass handoff, off after 1.5M; tests midpoint handoff robustness",
     # Smoke tests
     "smoke":        "Smoke test (hardware validation only)",
 }
@@ -421,9 +424,9 @@ def canonical_phase(phase: str) -> str:
 
     Preserved: _ns1024, _nosmooth, _nosoft, _codex_*, _knee, _soft, _gait, _stack.
     """
-    i9 = re.match(r"^(phasei9[a-z])(?:_|$)", phase, flags=re.IGNORECASE)
-    if i9:
-        return i9.group(1)
+    iter_probe = re.match(r"^(phasei\d+[a-z])(?:_|$)", phase, flags=re.IGNORECASE)
+    if iter_probe:
+        return iter_probe.group(1)
     result = _CANON_DEVICE_RE.sub("", phase)
     result = _CANON_VERSION_RE.sub("", result)
     return result or phase
@@ -546,6 +549,19 @@ def eval_summary(csv_path):
             last_shared_step = step
             stats["pi_minus_mppi_last"] = pair["pi"] - pair["mppi"]
     return stats
+
+
+MIN_COUNTED_RESULT_STEPS = 4_000_000
+
+
+def eval_is_countable(summary: dict, min_steps: int = MIN_COUNTED_RESULT_STEPS) -> bool:
+    """Return True once a run is mature enough for aggregate phase statistics.
+
+    Short interrupted runs are useful for debugging, but they should not change
+    phase means, G1 rates, or promising-phase ranking.
+    """
+    last_step = max(summary.get("last_pi_step") or -1, summary.get("last_mppi_step") or -1)
+    return last_step >= min_steps
 
 
 def _fmt_metric(v):
@@ -1158,7 +1174,10 @@ def api_phases():
         variants = sorted(info["variants"])
         bests = []
         for path in paths:
-            best = eval_summary(path)["best_any"]
+            summary = eval_summary(path)
+            if not eval_is_countable(summary):
+                continue
+            best = summary["best_any"]
             if best >= 0:
                 bests.append(best)
         n = len(bests)
@@ -1482,7 +1501,10 @@ def _promising_phases(tasks: list[dict], annotated_tasks: list[dict], limit: int
         entry = by_phase.setdefault(phase, {"bests": [], "variants": set()})
         if c["phase"] != phase:
             entry["variants"].add(c["phase"])
-        best = eval_summary(c["path"])["best_any"]
+        summary = eval_summary(c["path"])
+        if not eval_is_countable(summary):
+            continue
+        best = summary["best_any"]
         if best >= 0:
             entry["bests"].append(best)
 

@@ -1,0 +1,786 @@
+[
+  {
+    "id": "tad38ccd",
+    "label": "phasei9g-promote warm500k temp001 seed 4 dbf5cea-dirty (iter-9)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9g_warm500k_temp001_s4 SEEDS=4 K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=500000 TEMP_STABILITY=0.01 GLASS_WARMUP=500000 GLASS_DECAY=0 LATENT_SMOOTH=0.001 LATENT_SMOOTH_WARMUP=250000 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp",
+    "priority": 7,
+    "status": "failed",
+    "box": "ssh17637_gpu1",
+    "created_at": "2026-05-23T06:38:09Z",
+    "started_at": "2026-05-23T06:39:42Z",
+    "ended_at": "2026-05-23T16:32:07Z"
+  },
+  {
+    "id": "t584e5ee",
+    "label": "phasei9j-rerun2 nosmooth temp001 seed 1 dbf5cea-dirty (iter-9)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9j_nosmooth_temp001_rerun2 SEEDS=1 K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=500000 TEMP_STABILITY=0.01 GLASS_WARMUP=100000 GLASS_DECAY=0 LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35",
+    "priority": 7,
+    "status": "failed",
+    "box": "ssh6_3080",
+    "created_at": "2026-05-23T07:39:58Z",
+    "started_at": "2026-05-23T07:41:22Z",
+    "ended_at": "2026-05-23T19:37:56Z"
+  },
+  {
+    "id": "t07a268c",
+    "label": "phasei9o-rerun2 p1b-off2m seed 4 dbf5cea-dirty (iter-9)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9o_p1b_off2m_s4_rerun2 SEEDS=4 K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=2000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35",
+    "priority": 7,
+    "status": "done",
+    "box": "ssh9_2060_gpu0",
+    "created_at": "2026-05-23T07:39:58Z",
+    "started_at": "2026-05-23T12:09:44Z",
+    "ended_at": "2026-05-24T11:51:16Z"
+  },
+  {
+    "id": "td9a5d92",
+    "label": "phasei9j-promote nosmooth temp001 seed 4 dbf5cea-dirty (iter-9)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9j_nosmooth_temp001_s4 SEEDS=4 K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=500000 TEMP_STABILITY=0.01 GLASS_WARMUP=100000 GLASS_DECAY=0 LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35",
+    "priority": 7,
+    "status": "done",
+    "box": "local",
+    "created_at": "2026-05-23T11:55:14Z",
+    "started_at": "2026-05-24T12:37:24Z",
+    "ended_at": "2026-05-24T23:21:16Z",
+    "relaunch_note": "reset from stale running after Vast budget interruption at 20260524_123655Z",
+    "auto_promoted": {
+      "best_any": 446.6,
+      "status": "done",
+      "added": 1,
+      "at": "2026-05-24T23:21:16Z"
+    }
+  },
+  {
+    "id": "t221b3c3",
+    "label": "phasei9m-promote p1b-off2m seed 4 dbf5cea-dirty (iter-9)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9m_p1b_off2m_s4 SEEDS=4 K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=2000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35",
+    "priority": 7,
+    "status": "failed",
+    "box": "ssh3_3070",
+    "created_at": "2026-05-23T11:55:14Z",
+    "started_at": "2026-05-23T13:48:21Z",
+    "ended_at": "2026-05-24T05:05:14Z"
+  },
+  {
+    "id": "td71aa6a",
+    "label": "phasei9l-promote p1b-temp001 seed 2 dbf5cea-dirty (iter-9)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9l_p1b_temp001_s2 SEEDS=2 K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=25000 TEMP_STABILITY=0.01 GLASS_WARMUP=100000 GLASS_DECAY=0 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35",
+    "priority": 7,
+    "status": "failed",
+    "box": "ssh17637_gpu0",
+    "created_at": "2026-05-23T11:55:14Z",
+    "started_at": "2026-05-23T13:55:00Z",
+    "ended_at": "2026-05-23T21:32:04Z"
+  },
+  {
+    "id": "t0cdd1c7",
+    "label": "phasei9g-promote warm500k temp001 seed 3 dbf5cea-dirty (iter-9)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9g_warm500k_temp001_s3 SEEDS=3 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=500000 TEMP_STABILITY=0.01 GLASS_WARMUP=500000 GLASS_DECAY=0 LATENT_SMOOTH=0.001 LATENT_SMOOTH_WARMUP=250000",
+    "priority": 7,
+    "status": "done",
+    "box": "ssh17637_gpu0",
+    "created_at": "2026-05-23T14:36:21Z",
+    "started_at": "2026-05-24T12:37:24Z",
+    "ended_at": "2026-05-24T17:50:01Z",
+    "relaunch_note": "reset from stale running after Vast budget interruption at 20260524_123655Z"
+  },
+  {
+    "id": "t8cb43bb",
+    "label": "phasei9g-promote warm500k temp001 seed 5 dbf5cea-dirty (iter-9)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9g_warm500k_temp001_s5 SEEDS=5 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=500000 TEMP_STABILITY=0.01 GLASS_WARMUP=500000 GLASS_DECAY=0 LATENT_SMOOTH=0.001 LATENT_SMOOTH_WARMUP=250000",
+    "priority": 7,
+    "status": "failed",
+    "box": "ssh17637_gpu1",
+    "created_at": "2026-05-23T14:36:21Z",
+    "started_at": "2026-05-23T16:32:07Z",
+    "ended_at": "2026-05-24T01:16:34Z"
+  },
+  {
+    "id": "t081335b",
+    "label": "phasei9m-promote p1b off2m seed 3 dbf5cea-dirty (iter-9)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9m_p1b_off2m_s3 SEEDS=3 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=2000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 7,
+    "status": "failed",
+    "box": "ssh6_3080",
+    "created_at": "2026-05-23T14:36:21Z",
+    "started_at": "2026-05-23T19:37:56Z",
+    "ended_at": "2026-05-24T06:57:08Z"
+  },
+  {
+    "id": "t1a499f7",
+    "label": "phasei9m-promote p1b off2m seed 5 dbf5cea-dirty (iter-9)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9m_p1b_off2m_s5 SEEDS=5 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=2000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 7,
+    "status": "failed",
+    "box": "ssh17637_gpu0",
+    "created_at": "2026-05-23T14:36:21Z",
+    "started_at": "2026-05-23T21:32:04Z",
+    "ended_at": "2026-05-24T05:38:17Z"
+  },
+  {
+    "id": "t584ee77",
+    "label": "phasei9l-promote p1b temp001 seed 5 dbf5cea-dirty (iter-9)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9l_p1b_temp001_s5 SEEDS=5 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 TEMP_STABILITY=0.01 GLASS_WARMUP=100000 GLASS_DECAY=0 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 7,
+    "status": "done",
+    "box": "ssh17637_gpu1",
+    "created_at": "2026-05-23T14:36:21Z",
+    "started_at": "2026-05-24T01:16:34Z",
+    "ended_at": "2026-05-24T09:42:14Z"
+  },
+  {
+    "id": "td00ea4b",
+    "label": "phasei9n-fill p1b-k128 seed 2 dbf5cea-dirty (iter-9 overnight)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9n_p1b_k128_s2 SEEDS=2 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.0 GLASS_DECAY=0",
+    "priority": 8,
+    "status": "done",
+    "box": "ssh17637_gpu1",
+    "created_at": "2026-05-23T18:08:18Z",
+    "started_at": "2026-05-24T12:37:28Z",
+    "ended_at": "2026-05-24T17:50:03Z",
+    "relaunch_note": "reset from stale running after Vast budget interruption at 20260524_123655Z"
+  },
+  {
+    "id": "t392fd59",
+    "label": "phasei9n-fill p1b-k128 seed 3 dbf5cea-dirty (iter-9 overnight)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9n_p1b_k128_s3 SEEDS=3 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.0 GLASS_DECAY=0",
+    "priority": 8,
+    "status": "done",
+    "box": "ssh1_2080ti",
+    "created_at": "2026-05-23T18:08:18Z",
+    "started_at": "2026-05-24T12:37:33Z",
+    "ended_at": "2026-05-24T15:00:46Z",
+    "relaunch_note": "reset from stale running after Vast budget interruption at 20260524_123655Z"
+  },
+  {
+    "id": "t5ccd417",
+    "label": "phasei9n-fill p1b-k128 seed 5 dbf5cea-dirty (iter-9 overnight)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9n_p1b_k128_s5 SEEDS=5 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.0 GLASS_DECAY=0",
+    "priority": 8,
+    "status": "failed",
+    "box": "ssh3_3070",
+    "created_at": "2026-05-23T18:08:18Z",
+    "started_at": "2026-05-24T12:37:58Z",
+    "ended_at": "2026-05-25T03:51:26Z",
+    "relaunch_note": "reset from stale running after Vast budget interruption at 20260524_123655Z",
+    "auto_promoted": {
+      "best_any": 335.7,
+      "status": "failed",
+      "added": 1,
+      "at": "2026-05-25T03:51:28Z"
+    }
+  },
+  {
+    "id": "t25c11f2",
+    "label": "phasei9q p1b temp001 off2m seed 1 dbf5cea-dirty (iter-9 overnight)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9q_p1b_temp001_off2m_s1 SEEDS=1 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.01 GLASS_DECAY=2000000",
+    "priority": 8,
+    "status": "failed",
+    "created_at": "2026-05-23T18:08:18Z",
+    "ended_at": "2026-05-25T13:52:02Z",
+    "relaunch_note": "reset from stale running after Vast budget interruption at 20260524_123655Z",
+    "recovery_history": [
+      {
+        "at": "2026-05-25T08:00:49Z",
+        "from_status": "running",
+        "from_box": "ssh3_3060ti",
+        "reason": "vast budget shutdown / stale running reset"
+      }
+    ],
+    "box": "ssh17637_gpu1",
+    "started_at": "2026-05-25T08:01:29Z",
+    "auto_promoted": {
+      "best_any": 285.6,
+      "status": "failed",
+      "added": 1,
+      "at": "2026-05-25T13:52:03Z"
+    }
+  },
+  {
+    "id": "t6214896",
+    "label": "phasei9q p1b temp001 off2m seed 2 dbf5cea-dirty (iter-9 overnight)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9q_p1b_temp001_off2m_s2 SEEDS=2 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.01 GLASS_DECAY=2000000",
+    "priority": 8,
+    "status": "done",
+    "box": "local",
+    "created_at": "2026-05-23T18:08:18Z",
+    "started_at": "2026-05-24T05:26:54Z",
+    "ended_at": "2026-05-24T10:34:10Z"
+  },
+  {
+    "id": "tafb2f62",
+    "label": "phasei9q p1b temp001 off2m seed 4 dbf5cea-dirty (iter-9 overnight)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9q_p1b_temp001_off2m_s4 SEEDS=4 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.01 GLASS_DECAY=2000000",
+    "priority": 8,
+    "status": "done",
+    "box": "ssh17637_gpu0",
+    "created_at": "2026-05-23T18:08:18Z",
+    "started_at": "2026-05-24T05:38:17Z",
+    "ended_at": "2026-05-24T09:42:16Z",
+    "auto_promoted": {
+      "best_any": 405.7,
+      "status": "done",
+      "added": 1,
+      "at": "2026-05-24T09:42:17Z"
+    }
+  },
+  {
+    "id": "t7899c7e",
+    "label": "phasei9r p1b off1m seed 1 dbf5cea-dirty (iter-9 overnight)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9r_p1b_off1m_s1 SEEDS=1 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.0 GLASS_DECAY=1000000",
+    "priority": 9,
+    "status": "failed",
+    "created_at": "2026-05-23T18:08:18Z",
+    "ended_at": "2026-05-25T08:05:54Z",
+    "relaunch_note": "reset from stale running after Vast budget interruption at 20260524_123655Z",
+    "recovery_history": [
+      {
+        "at": "2026-05-25T08:00:49Z",
+        "from_status": "running",
+        "from_box": "ssh9_2060_gpu0",
+        "reason": "vast budget shutdown / stale running reset"
+      }
+    ],
+    "box": "ssh3_3060ti",
+    "started_at": "2026-05-25T08:02:09Z"
+  },
+  {
+    "id": "ta90d285",
+    "label": "phasei9r p1b off1m seed 4 dbf5cea-dirty (iter-9 overnight)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9r_p1b_off1m_s4 SEEDS=4 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.0 GLASS_DECAY=1000000",
+    "priority": 9,
+    "status": "running",
+    "created_at": "2026-05-23T18:08:18Z",
+    "ended_at": null,
+    "relaunch_note": "reset from stale running after Vast budget interruption at 20260524_123655Z",
+    "recovery_history": [
+      {
+        "at": "2026-05-25T08:00:49Z",
+        "from_status": "running",
+        "from_box": "ssh9_2060_gpu1",
+        "reason": "vast budget shutdown / stale running reset"
+      }
+    ],
+    "box": "ssh9_2060_gpu0",
+    "started_at": "2026-05-25T08:02:16Z"
+  },
+  {
+    "id": "tb8fd255",
+    "label": "phasei9s p1b off1p5m seed 1 dbf5cea-dirty (iter-9)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9s_p1b_off1p5m_s1 SEEDS=1 K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=1500000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp",
+    "priority": 9,
+    "status": "done",
+    "box": "ssh9_2060_gpu2",
+    "created_at": "2026-05-24T07:41:37Z",
+    "started_at": "2026-05-24T12:38:46Z",
+    "ended_at": "2026-05-25T07:31:24Z",
+    "relaunch_note": "reset from stale running after Vast budget interruption at 20260524_123655Z"
+  },
+  {
+    "id": "t6d15d04",
+    "label": "phasei9t p1b off1p5m seed 4 dbf5cea-dirty (iter-9)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9t_p1b_off1p5m_s4 SEEDS=4 K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=1500000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp",
+    "priority": 9,
+    "status": "running",
+    "created_at": "2026-05-24T07:41:37Z",
+    "ended_at": null,
+    "relaunch_note": "reset from stale running after Vast budget interruption at 20260524_123655Z",
+    "recovery_history": [
+      {
+        "at": "2026-05-25T08:00:49Z",
+        "from_status": "running",
+        "from_box": "ssh9_2060_gpu3",
+        "reason": "vast budget shutdown / stale running reset"
+      }
+    ],
+    "box": "ssh9_2060_gpu1",
+    "started_at": "2026-05-25T08:02:24Z"
+  },
+  {
+    "id": "te511ed4",
+    "label": "phasei9u p1b off3m seed 4 dbf5cea-dirty (iter-9)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9u_p1b_off3m_s4 SEEDS=4 K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=3000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp",
+    "priority": 9,
+    "status": "failed",
+    "box": "ssh6_3080",
+    "created_at": "2026-05-24T07:41:37Z",
+    "started_at": "2026-05-24T12:45:57Z",
+    "ended_at": "2026-05-24T23:36:14Z",
+    "relaunch_note": "reset from stale running after Vast budget interruption at 20260524_123655Z"
+  },
+  {
+    "id": "te254f53",
+    "label": "auto-promote phasei9q_p1b_temp001_off2m_s4 seed 3 from tafb2f62 best_any=405.7",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9q_p1b_temp001_off2m_s4_auto_s3 SEEDS=3 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.01 GLASS_DECAY=2000000",
+    "priority": 8,
+    "status": "done",
+    "created_at": "2026-05-24T09:42:17Z",
+    "ended_at": "2026-05-25T14:40:59Z",
+    "auto_parent": "tafb2f62",
+    "auto_reason": "best_any=405.7 status=done add_count=1",
+    "relaunch_note": "reset from stale running after Vast budget interruption at 20260524_123655Z",
+    "recovery_history": [
+      {
+        "at": "2026-05-25T08:00:49Z",
+        "from_status": "running",
+        "from_box": "ssh4_8080",
+        "reason": "vast budget shutdown / stale running reset"
+      }
+    ],
+    "box": "ssh3_3070",
+    "started_at": "2026-05-25T08:01:33Z",
+    "auto_promoted": {
+      "best_any": 609.0,
+      "status": "done",
+      "added": 5,
+      "at": "2026-05-25T14:41:01Z"
+    }
+  },
+  {
+    "id": "t8c64b2b",
+    "label": "sleep8h clean i9m p1b off2m seed 1 (fresh tag)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9m_sleep8h_20260524_s1 SEEDS=1 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=2000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "failed",
+    "box": "ssh1_2080ti",
+    "created_at": "2026-05-24T14:11:32Z",
+    "started_at": "2026-05-24T15:00:52Z",
+    "ended_at": "2026-05-25T00:29:25Z",
+    "sleep8h_batch": "20260524_141132",
+    "auto_promoted": {
+      "best_any": 340.1,
+      "status": "failed",
+      "added": 1,
+      "at": "2026-05-25T00:29:29Z"
+    }
+  },
+  {
+    "id": "tbaf0ae6",
+    "label": "sleep8h clean i9m p1b off2m seed 2 (fresh tag)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9m_sleep8h_20260524_s2 SEEDS=2 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=2000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "failed",
+    "box": "ssh17637_gpu0",
+    "created_at": "2026-05-24T14:11:32Z",
+    "started_at": "2026-05-24T17:50:05Z",
+    "ended_at": "2026-05-25T00:00:49Z",
+    "sleep8h_batch": "20260524_141132"
+  },
+  {
+    "id": "t906d91f",
+    "label": "sleep8h clean i9m p1b off2m seed 3 (fresh tag)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9m_sleep8h_20260524_s3 SEEDS=3 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=2000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "failed",
+    "box": "ssh17637_gpu1",
+    "created_at": "2026-05-24T14:11:32Z",
+    "started_at": "2026-05-24T17:50:09Z",
+    "ended_at": "2026-05-25T03:15:20Z",
+    "sleep8h_batch": "20260524_141132",
+    "auto_promoted": {
+      "best_any": 519.2,
+      "status": "failed",
+      "added": 4,
+      "at": "2026-05-25T03:15:21Z"
+    }
+  },
+  {
+    "id": "t3c54693",
+    "label": "sleep8h clean i9m p1b off2m seed 4 (fresh tag)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9m_sleep8h_20260524_s4 SEEDS=4 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=2000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "running",
+    "created_at": "2026-05-24T14:11:32Z",
+    "ended_at": null,
+    "sleep8h_batch": "20260524_141132",
+    "recovery_history": [
+      {
+        "at": "2026-05-25T08:00:49Z",
+        "from_status": "running",
+        "from_box": "ssh6_3080",
+        "reason": "vast budget shutdown / stale running reset"
+      }
+    ],
+    "box": "ssh9_2060_gpu2",
+    "started_at": "2026-05-25T08:02:32Z"
+  },
+  {
+    "id": "t7a3f7a8",
+    "label": "sleep8h clean i9m p1b off2m seed 5 (fresh tag)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9m_sleep8h_20260524_s5 SEEDS=5 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=2000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "failed",
+    "created_at": "2026-05-24T14:11:32Z",
+    "ended_at": "2026-05-25T11:27:48Z",
+    "sleep8h_batch": "20260524_141132",
+    "recovery_history": [
+      {
+        "at": "2026-05-25T08:00:49Z",
+        "from_status": "running",
+        "from_box": "ssh17637_gpu0",
+        "reason": "vast budget shutdown / stale running reset"
+      }
+    ],
+    "box": "ssh9_2060_gpu3",
+    "started_at": "2026-05-25T08:02:40Z",
+    "auto_promoted": {
+      "best_any": 444.0,
+      "status": "failed",
+      "added": 0,
+      "at": "2026-05-25T11:27:50Z"
+    }
+  },
+  {
+    "id": "t1e78bd0",
+    "label": "sleep8h clean i9n p1b k128 seed 1 (fresh tag)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9n_sleep8h_20260524_s1 SEEDS=1 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=0 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "done",
+    "created_at": "2026-05-24T14:11:32Z",
+    "ended_at": "2026-05-25T14:30:25Z",
+    "sleep8h_batch": "20260524_141132",
+    "recovery_history": [
+      {
+        "at": "2026-05-25T08:00:49Z",
+        "from_status": "running",
+        "from_box": "ssh1_2080ti",
+        "reason": "vast budget shutdown / stale running reset"
+      }
+    ],
+    "box": "local",
+    "started_at": "2026-05-25T08:04:14Z"
+  },
+  {
+    "id": "tc921313",
+    "label": "sleep8h clean i9n p1b k128 seed 2 (fresh tag)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9n_sleep8h_20260524_s2 SEEDS=2 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=0 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "failed",
+    "created_at": "2026-05-24T14:11:32Z",
+    "ended_at": "2026-05-25T12:47:43Z",
+    "sleep8h_batch": "20260524_141132",
+    "recovery_history": [
+      {
+        "at": "2026-05-25T08:00:49Z",
+        "from_status": "running",
+        "from_box": "ssh17637_gpu1",
+        "reason": "vast budget shutdown / stale running reset"
+      }
+    ],
+    "box": "ssh4_8080",
+    "started_at": "2026-05-25T08:04:14Z"
+  },
+  {
+    "id": "t389de3a",
+    "label": "sleep8h clean i9n p1b k128 seed 3 (fresh tag)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9n_sleep8h_20260524_s3 SEEDS=3 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=0 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "done",
+    "created_at": "2026-05-24T14:11:32Z",
+    "ended_at": "2026-05-25T17:47:04Z",
+    "sleep8h_batch": "20260524_141132",
+    "recovery_history": [
+      {
+        "at": "2026-05-25T08:00:49Z",
+        "from_status": "running",
+        "from_box": "ssh9_2060_gpu2",
+        "reason": "vast budget shutdown / stale running reset"
+      }
+    ],
+    "box": "ssh3_3060ti",
+    "started_at": "2026-05-25T08:05:55Z"
+  },
+  {
+    "id": "t5afd899",
+    "label": "sleep8h clean i9n p1b k128 seed 4 (fresh tag)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9n_sleep8h_20260524_s4 SEEDS=4 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=0 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "done",
+    "box": "ssh1_2080ti",
+    "created_at": "2026-05-24T14:11:32Z",
+    "started_at": "2026-05-25T08:30:19Z",
+    "ended_at": "2026-05-25T15:46:42Z",
+    "sleep8h_batch": "20260524_141132",
+    "auto_promoted": {
+      "best_any": 447.5,
+      "status": "done",
+      "added": 1,
+      "at": "2026-05-25T15:46:47Z"
+    }
+  },
+  {
+    "id": "t60b106f",
+    "label": "sleep8h clean i9n p1b k128 seed 5 (fresh tag)",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9n_sleep8h_20260524_s5 SEEDS=5 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=0 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "running",
+    "box": "ssh9_2060_gpu3",
+    "created_at": "2026-05-24T14:11:32Z",
+    "started_at": "2026-05-25T11:27:50Z",
+    "ended_at": null,
+    "sleep8h_batch": "20260524_141132"
+  },
+  {
+    "id": "tdb9f0bf",
+    "label": "auto-promote phasei9j_nosmooth_temp001_s4 seed 2 from td9a5d92 best_any=446.6",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9j_nosmooth_temp001_s4_auto_s2 SEEDS=2 K_UPDATE=128 MPPI_NS=2048 EXPL_UNTIL=500000 TEMP_STABILITY=0.01 GLASS_WARMUP=100000 GLASS_DECAY=0 LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35",
+    "priority": 7,
+    "status": "failed",
+    "created_at": "2026-05-24T23:21:16Z",
+    "ended_at": "2026-05-25T17:25:37Z",
+    "auto_parent": "td9a5d92",
+    "auto_reason": "best_any=446.6 status=done add_count=1",
+    "recovery_history": [
+      {
+        "at": "2026-05-25T08:00:49Z",
+        "from_status": "running",
+        "from_box": "local",
+        "reason": "vast budget shutdown / stale running reset"
+      }
+    ],
+    "box": "ssh17637_gpu0",
+    "started_at": "2026-05-25T08:01:24Z"
+  },
+  {
+    "id": "t9c3cb49",
+    "label": "auto-promote phasei9m_sleep8h_20260524_s1 seed 6 from t8c64b2b best_any=340.1",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9m_sleep8h_20260524_s1_auto_s6 SEEDS=6 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=2000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "done",
+    "box": "ssh4_8080",
+    "created_at": "2026-05-25T00:29:29Z",
+    "started_at": "2026-05-25T12:47:47Z",
+    "ended_at": "2026-05-26T01:47:34Z",
+    "auto_parent": "t8c64b2b",
+    "auto_reason": "best_any=340.1 status=failed add_count=1"
+  },
+  {
+    "id": "t1230ed6",
+    "label": "auto-promote phasei9m_sleep8h_20260524_s3 seed 7 from t906d91f best_any=519.2",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9m_sleep8h_20260524_s3_auto_s7 SEEDS=7 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=2000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "done",
+    "box": "local",
+    "created_at": "2026-05-25T03:15:21Z",
+    "started_at": "2026-05-25T14:30:25Z",
+    "ended_at": "2026-05-26T01:11:26Z",
+    "auto_parent": "t906d91f",
+    "auto_reason": "best_any=519.2 status=failed add_count=5"
+  },
+  {
+    "id": "t4cb9313",
+    "label": "auto-promote phasei9m_sleep8h_20260524_s3 seed 8 from t906d91f best_any=519.2",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9m_sleep8h_20260524_s3_auto_s8 SEEDS=8 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=2000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "running",
+    "box": "ssh3_3060ti",
+    "created_at": "2026-05-25T03:15:21Z",
+    "started_at": "2026-05-25T21:15:45Z",
+    "ended_at": null,
+    "auto_parent": "t906d91f",
+    "auto_reason": "best_any=519.2 status=failed add_count=5"
+  },
+  {
+    "id": "t738f024",
+    "label": "auto-promote phasei9m_sleep8h_20260524_s3 seed 9 from t906d91f best_any=519.2",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9m_sleep8h_20260524_s3_auto_s9 SEEDS=9 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=2000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "running",
+    "box": "ssh17637_gpu1",
+    "created_at": "2026-05-25T03:15:21Z",
+    "started_at": "2026-05-25T21:55:05Z",
+    "ended_at": null,
+    "auto_parent": "t906d91f",
+    "auto_reason": "best_any=519.2 status=failed add_count=5"
+  },
+  {
+    "id": "te91c729",
+    "label": "auto-promote phasei9m_sleep8h_20260524_s3 seed 10 from t906d91f best_any=519.2",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9m_sleep8h_20260524_s3_auto_s10 SEEDS=10 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=2000000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "running",
+    "box": "ssh1_2080ti",
+    "created_at": "2026-05-25T03:15:21Z",
+    "started_at": "2026-05-26T01:07:49Z",
+    "ended_at": null,
+    "auto_parent": "t906d91f",
+    "auto_reason": "best_any=519.2 status=failed add_count=5"
+  },
+  {
+    "id": "t93b5747",
+    "label": "auto-promote phasei9n_p1b_k128_s5 seed 1 from t5ccd417 best_any=335.7",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9n_p1b_k128_s5_auto_s1 SEEDS=1 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.0 GLASS_DECAY=0",
+    "priority": 8,
+    "status": "failed",
+    "created_at": "2026-05-25T03:51:28Z",
+    "ended_at": "2026-05-25T20:45:42Z",
+    "auto_parent": "t5ccd417",
+    "auto_reason": "best_any=335.7 status=failed add_count=1",
+    "recovery_history": [
+      {
+        "at": "2026-05-25T08:00:49Z",
+        "from_status": "running",
+        "from_box": "ssh3_3070",
+        "reason": "vast budget shutdown / stale running reset"
+      }
+    ],
+    "box": "ssh6_3080",
+    "started_at": "2026-05-25T08:01:43Z"
+  },
+  {
+    "id": "tbe74fc9",
+    "label": "auto-promote phasei9q_p1b_temp001_off2m_s1 seed 5 from t25c11f2 best_any=285.6",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9q_p1b_temp001_off2m_s1_auto_s5 SEEDS=5 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.01 GLASS_DECAY=2000000",
+    "priority": 8,
+    "status": "failed",
+    "box": "ssh17637_gpu1",
+    "created_at": "2026-05-25T13:52:03Z",
+    "started_at": "2026-05-25T13:52:03Z",
+    "ended_at": "2026-05-25T21:55:04Z",
+    "auto_parent": "t25c11f2",
+    "auto_reason": "best_any=285.6 status=failed add_count=1",
+    "auto_promoted": {
+      "best_any": 447.3,
+      "status": "failed",
+      "added": 0,
+      "at": "2026-05-25T21:55:05Z"
+    }
+  },
+  {
+    "id": "t1e2d1c3",
+    "label": "auto-promote phasei9q_p1b_temp001_off2m_s4_auto_s3 seed 6 from te254f53 best_any=609.0",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9q_p1b_temp001_off2m_s4_auto_s3_auto_s6 SEEDS=6 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.01 GLASS_DECAY=2000000",
+    "priority": 8,
+    "status": "done",
+    "box": "ssh3_3070",
+    "created_at": "2026-05-25T14:41:01Z",
+    "started_at": "2026-05-25T14:41:01Z",
+    "ended_at": "2026-05-26T02:32:57Z",
+    "auto_parent": "te254f53",
+    "auto_reason": "best_any=609.0 status=done add_count=5"
+  },
+  {
+    "id": "t773ab0a",
+    "label": "auto-promote phasei9q_p1b_temp001_off2m_s4_auto_s3 seed 7 from te254f53 best_any=609.0",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9q_p1b_temp001_off2m_s4_auto_s3_auto_s7 SEEDS=7 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.01 GLASS_DECAY=2000000",
+    "priority": 8,
+    "status": "done",
+    "box": "ssh1_2080ti",
+    "created_at": "2026-05-25T14:41:01Z",
+    "started_at": "2026-05-25T15:46:47Z",
+    "ended_at": "2026-05-26T01:07:45Z",
+    "auto_parent": "te254f53",
+    "auto_reason": "best_any=609.0 status=done add_count=5",
+    "auto_promoted": {
+      "best_any": 521.0,
+      "status": "done",
+      "added": 0,
+      "at": "2026-05-26T01:07:49Z"
+    }
+  },
+  {
+    "id": "tfd66d00",
+    "label": "auto-promote phasei9q_p1b_temp001_off2m_s4_auto_s3 seed 8 from te254f53 best_any=609.0",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9q_p1b_temp001_off2m_s4_auto_s3_auto_s8 SEEDS=8 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.01 GLASS_DECAY=2000000",
+    "priority": 8,
+    "status": "failed",
+    "box": "ssh17637_gpu0",
+    "created_at": "2026-05-25T14:41:01Z",
+    "started_at": "2026-05-25T17:25:38Z",
+    "ended_at": "2026-05-26T01:44:32Z",
+    "auto_parent": "te254f53",
+    "auto_reason": "best_any=609.0 status=done add_count=5",
+    "auto_promoted": {
+      "best_any": 379.8,
+      "status": "failed",
+      "added": 0,
+      "at": "2026-05-26T01:44:33Z"
+    }
+  },
+  {
+    "id": "tcec2258",
+    "label": "auto-promote phasei9q_p1b_temp001_off2m_s4_auto_s3 seed 9 from te254f53 best_any=609.0",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9q_p1b_temp001_off2m_s4_auto_s3_auto_s9 SEEDS=9 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.01 GLASS_DECAY=2000000",
+    "priority": 8,
+    "status": "failed",
+    "box": "ssh3_3060ti",
+    "created_at": "2026-05-25T14:41:01Z",
+    "started_at": "2026-05-25T17:47:06Z",
+    "ended_at": "2026-05-25T21:15:44Z",
+    "auto_parent": "te254f53",
+    "auto_reason": "best_any=609.0 status=done add_count=5"
+  },
+  {
+    "id": "t5983bf1",
+    "label": "auto-promote phasei9q_p1b_temp001_off2m_s4_auto_s3 seed 10 from te254f53 best_any=609.0",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9q_p1b_temp001_off2m_s4_auto_s3_auto_s10 SEEDS=10 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 EXPL_UNTIL=25000 GLASS_WARMUP=100000 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0 TEMP_STABILITY=0.01 GLASS_DECAY=2000000",
+    "priority": 8,
+    "status": "running",
+    "box": "ssh6_3080",
+    "created_at": "2026-05-25T14:41:01Z",
+    "started_at": "2026-05-25T20:45:48Z",
+    "ended_at": null,
+    "auto_parent": "te254f53",
+    "auto_reason": "best_any=609.0 status=done add_count=5"
+  },
+  {
+    "id": "td9367d2",
+    "label": "auto-promote phasei9n_sleep8h_20260524_s4 seed 6 from t5afd899 best_any=447.5",
+    "launcher": "scripts/run_phasei9_glass_probe.sh",
+    "env": "PROBE_ID=phasei9n_sleep8h_20260524_s4_auto_s6 SEEDS=6 K_UPDATE=128 MPPI_NS=2048 CODE_SHA=dbf5cea-dirty XLA_FLAGS=--xla_gpu_autotune_level=0 TMPDIR=/root/helios-rl/tmp EXPL_UNTIL=25000 TEMP_STABILITY=0.0 GLASS_WARMUP=100000 GLASS_DECAY=0 PROTO_TEMP=0.7 ASSIGN_SCALE=0.5 STOPGRAD=true LATENT_SMOOTH=0.0 LATENT_SMOOTH_WARMUP=0",
+    "priority": 10,
+    "status": "running",
+    "box": "local",
+    "created_at": "2026-05-25T15:46:47Z",
+    "started_at": "2026-05-26T01:11:26Z",
+    "ended_at": null,
+    "auto_parent": "t5afd899",
+    "auto_reason": "best_any=447.5 status=done add_count=1"
+  }
+]

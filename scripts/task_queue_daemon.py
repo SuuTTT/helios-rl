@@ -348,16 +348,26 @@ def normalized_family_env(env: str) -> tuple[tuple[str, str], ...]:
     return tuple(sorted((k, v) for k, v in parse_env(env).items() if k not in skip))
 
 
-def best_any_from_log(task: dict) -> float | None:
+MIN_FAILED_PROMOTION_STEPS = 4_000_000
+
+
+def best_any_and_last_step_from_log(task: dict) -> tuple[float | None, int]:
     text = task_eval_log(task)
     best = None
+    last_step = -1
     for line in text.splitlines():
+        sm = re.search(r"step=\s*([0-9,]+)", line)
+        if sm:
+            try:
+                last_step = max(last_step, int(sm.group(1).replace(",", "")))
+            except ValueError:
+                pass
         m = re.search(r"pi_reward=\s*([-+]?\d+(?:\.\d+)?)\s+MPPI=\s*([-+]?\d+(?:\.\d+)?)", line)
         if not m:
             continue
         val = max(float(m.group(1)), float(m.group(2)))
         best = val if best is None else max(best, val)
-    return best
+    return best, last_step
 
 
 def existing_family_seeds(tasks: list[dict], family_key: tuple[tuple[str, str], ...]) -> set[int]:
@@ -381,8 +391,19 @@ def auto_promote_task(tasks: list[dict], task: dict, status: str) -> None:
     env = task.get("env", "")
     if "run_phasei9_glass_probe.sh" not in launcher or "SEEDS=" not in env:
         return
-    best = best_any_from_log(task)
+    best, last_step = best_any_and_last_step_from_log(task)
     if best is None:
+        return
+    if status == "failed" and last_step < MIN_FAILED_PROMOTION_STEPS:
+        task["auto_promoted"] = {
+            "best_any": best,
+            "status": status,
+            "added": 0,
+            "at": now_iso(),
+            "skip_reason": f"failed_before_{MIN_FAILED_PROMOTION_STEPS}_steps",
+            "last_step": last_step,
+        }
+        log(f"skip auto-promote {task['id']}: failed at {last_step} < {MIN_FAILED_PROMOTION_STEPS}")
         return
 
     # Failed-but-informative runs get a 100-point lower bar. This covers SIGKILL
