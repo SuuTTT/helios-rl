@@ -13,6 +13,7 @@ export MUJOCO_GL=${MUJOCO_GL:-egl}
 
 SEEDS=${SEEDS:-"1 2 3 4 5"}
 K_UPDATE=${K_UPDATE:-128}
+SAVE_FULL_STATE=${SAVE_FULL_STATE:-false}
 export TDMPC_GLASS_OUTPUT_TAG="phaseab_codex_tdmpc2_k${K_UPDATE}"
 LOG_DIR=$REPO/exp/tdmpc_glass/logs/$TDMPC_GLASS_OUTPUT_TAG
 mkdir -p "$LOG_DIR"
@@ -21,7 +22,7 @@ echo "[phaseab] start $(date -u +%FT%TZ) TD-MPC2 K_UPDATE=$K_UPDATE seeds=$SEEDS
 for seed in $SEEDS; do
   log="$LOG_DIR/HopperHop_seed_${seed}.log"
   echo "[phaseab] === seed=$seed start $(date -u +%FT%TZ) ===" | tee -a "$log" | tee -a "$LOG_DIR/queue.log"
-  python3 -u scripts/run_benchmark.py \
+  cmd=(python3 -u scripts/run_benchmark.py \
     --algos tdmpc2 --tasks HopperHop \
     --total_steps 10000000 --seed "$seed" \
     --mppi_n_samples 2048 \
@@ -30,8 +31,10 @@ for seed in $SEEDS; do
     --latent_action_smooth_coef 0.001 \
     --latent_smooth_warmup_env_steps 250000 \
     --early_stop_patience 3000000 \
-    --save_full_state \
-    --no_plot 2>&1 | tee -a "$log"
+    --no_plot)
+  if [[ "$SAVE_FULL_STATE" == "true" ]]; then
+    cmd+=(--save_full_state)
+  fi
+  "${cmd[@]}" 2>&1 | tee -a "$log"
   echo "[phaseab] === seed=$seed done status=${PIPESTATUS[0]} $(date -u +%FT%TZ) ===" | tee -a "$log" | tee -a "$LOG_DIR/queue.log"
 done
-

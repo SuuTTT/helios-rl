@@ -43,8 +43,8 @@ slot table, plus aggregate rows below.
 | Box | GPU | $/h | DLPerf/$ | Live SPS | SPS per $/h | State | Recommendation |
 |---|---|---:|---:|---:|---:|---|---|
 | `ssh6_4060` | RTX 4060 | 0.0622 | 251.4 | - | - | unreachable/stopped | Keep only if it becomes reachable; otherwise remove from fleet registry. |
-| `ssh17637_gpu0` | RTX 3060 laptop | 0.0484 | 207.0 | 107 | 2209 | running | Keep. Above DLPerf/$ bar and acceptable cost/SPS. |
-| `ssh17637_gpu1` | RTX 3060 laptop | 0.0484 | 207.0 | 108 | 2229 | running | Keep. Same as GPU0. |
+| `ssh17637_gpu0` | RTX 3060 laptop | 0.0484 | 207.0 | 107 | 2209 | destroyed | Retired 2026-05-27 after user destroyed the instance; remove from dispatch. |
+| `ssh17637_gpu1` | RTX 3060 laptop | 0.0484 | 207.0 | 108 | 2229 | destroyed | Retired 2026-05-27 after user destroyed the instance; remove from dispatch. |
 | `ssh1_2080ti` | RTX 2080 Ti | 0.0889 | 124.3 | 164 | 1845 | running | Finish current useful run, then replace. Below DLPerf/$ bar. |
 | `ssh3_3070` | RTX 3070 | 0.0756 | 217.4 | 146 | 1932 | running | Keep. Above bar; not fastest, but acceptable. |
 | `ssh6_3080` | RTX 3080 | 0.0756 | 356.7 | 139 | 1840 | running | Keep. Strong DLPerf/$; current SPS is likely workload/phase limited. |
@@ -60,7 +60,7 @@ Aggregate multi-GPU view:
 | Instance | GPUs | Total $/h | Total live SPS | SPS per $/h | Vast DLPerf/$ | Decision |
 |---|---:|---:|---:|---:|---:|---|
 | `ssh9` | 4x RTX 2060 | 0.1693 | 430 | 2540 | 74.7 | Keep while all 4 GPUs are saturated; do not rent another similar box by DLPerf/$ rule. |
-| `ssh17637` | 2x RTX 3060 laptop | 0.0969 | 215 | 2219 | 207.0 | Keep. Good enough on both rules. |
+| `ssh17637` | 2x RTX 3060 laptop | 0.0969 | 215 | 2219 | 207.0 | Destroyed/retired 2026-05-27. Do not leave stale slots in queue dispatch. |
 
 ## Decision
 
@@ -94,7 +94,10 @@ Notes:
 
 Keep:
 
-- `ssh17637` 2x 3060 laptop: above 200 DLPerf/$ and acceptable actual cost/SPS.
+- `ssh17637` 2x 3060 laptop: retired 2026-05-27 after destruction. Future
+  similar boxes should be treated as disposable; if disconnected for 24h, sync
+  available logs, mark assigned tasks failed, destroy the instance, and remove
+  it from `task_queue_daemon.py` / `web_dashboard.py`.
 - `ssh3_3070`: above 200 DLPerf/$.
 - `ssh6_3080`: excellent DLPerf/$.
 - `ssh9` 4x 2060: bad DLPerf/$ but good aggregate actual SPS/$ while all four GPUs are loaded. Keep only if all four slots stay saturated and stable.

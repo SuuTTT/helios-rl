@@ -28,8 +28,15 @@ GLASS_DECAY=${GLASS_DECAY:-0}
 PROTO_TEMP=${PROTO_TEMP:-1.0}
 ASSIGN_SCALE=${ASSIGN_SCALE:-1.0}
 STOPGRAD=${STOPGRAD:-true}
+NUM_PROTOTYPES=${NUM_PROTOTYPES:-32}
+NUM_CLUSTERS=${NUM_CLUSTERS:-8}
+NUM_SUPER_CLUSTERS=${NUM_SUPER_CLUSTERS:-0}
+LAMBDA_SUPER_SE=${LAMBDA_SUPER_SE:-0.0}
+LAMBDA_SUPER_BALANCE=${LAMBDA_SUPER_BALANCE:-0.0}
 LATENT_SMOOTH=${LATENT_SMOOTH:-0.001}
 LATENT_SMOOTH_WARMUP=${LATENT_SMOOTH_WARMUP:-250000}
+CONTROLLER_ARBITRATION=${CONTROLLER_ARBITRATION:-none}
+ARBITRATION_MARGIN=${ARBITRATION_MARGIN:-0}
 CODE_SHA=${CODE_SHA:-$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)}
 TAG_SHA=${CODE_SHA//[^A-Za-z0-9_.-]/_}
 TAG_PROBE=${PROBE_ID//[^A-Za-z0-9_.-]/_}
@@ -48,7 +55,10 @@ status=0
   echo "[${PROBE_ID}] K=${K_UPDATE} NS=${MPPI_NS} expl_until=${EXPL_UNTIL}"
   echo "[${PROBE_ID}] temp_stability=${TEMP_STABILITY} glass_warmup=${GLASS_WARMUP} glass_decay=${GLASS_DECAY}"
   echo "[${PROBE_ID}] proto_temp=${PROTO_TEMP} assign_scale=${ASSIGN_SCALE} stopgrad=${STOPGRAD}"
+  echo "[${PROBE_ID}] num_prototypes=${NUM_PROTOTYPES} num_clusters=${NUM_CLUSTERS} num_super_clusters=${NUM_SUPER_CLUSTERS}"
+  echo "[${PROBE_ID}] lambda_super_se=${LAMBDA_SUPER_SE} lambda_super_balance=${LAMBDA_SUPER_BALANCE}"
   echo "[${PROBE_ID}] latent_smooth=${LATENT_SMOOTH} latent_smooth_warmup=${LATENT_SMOOTH_WARMUP}"
+  echo "[${PROBE_ID}] controller_arbitration=${CONTROLLER_ARBITRATION} arbitration_margin=${ARBITRATION_MARGIN}"
 } | tee -a "$LOG_DIR/queue.log"
 
 for seed in $SEEDS; do
@@ -69,8 +79,15 @@ for seed in $SEEDS; do
     --glass_proto_temperature "$PROTO_TEMP" \
     --glass_assign_logits_init_scale "$ASSIGN_SCALE" \
     --glass_stopgrad_graph "$STOPGRAD" \
+    --glass_num_prototypes "$NUM_PROTOTYPES" \
+    --glass_num_clusters "$NUM_CLUSTERS" \
+    --glass_num_super_clusters "$NUM_SUPER_CLUSTERS" \
+    --glass_lambda_super_se "$LAMBDA_SUPER_SE" \
+    --glass_lambda_super_balance "$LAMBDA_SUPER_BALANCE" \
     --glass_lambda_temp_stability "$TEMP_STABILITY" \
     --early_stop_patience "$EARLY_STOP_PATIENCE" \
+    --controller_arbitration "$CONTROLLER_ARBITRATION" \
+    --arbitration_margin "$ARBITRATION_MARGIN" \
     --no_plot 2>&1 | tee -a "$log"
   seed_status=${PIPESTATUS[0]}
   if [[ "$seed_status" -ne 0 ]]; then

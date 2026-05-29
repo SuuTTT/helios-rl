@@ -1087,18 +1087,26 @@ Fleet cleanup:
 - The dashboard, queue daemon, and stream registry were updated to remove those
   workers.
 
-Long-run support:
+Run-length support:
 - `scripts/run_phasei9_glass_probe.sh` now accepts `TOTAL_STEPS` and
   `EARLY_STOP_PATIENCE`.
 - Default remains `10M` steps with `3M` early-stop patience.
-- Long confirmation tasks can set `TOTAL_STEPS=12000000` and
-  `EARLY_STOP_PATIENCE=0`, allowing runs to continue past 8 hours on slower
-  workers.
+- We are not using 12M long confirmations right now. The near-term goal is fair
+  5-seed confidence intervals against TD-MPC2, so promising recipes should get
+  seeds 1-5 under the standard 10M budget.
 
-New queued phase:
-- `phasei10d_off1m_long12m`, seeds 1-5, priority 13.
-- Recipe: Phase1b-style Glass, K128, exploration until 25k, Glass warmup 100k,
-  Glass decay/off at 1M, no temp-stability, no latent smooth, 12M cap, early
-  stop disabled.
-- Purpose: clean long confirmation of the current strongest off-at-1M handoff
-  hypothesis after `phasei10c` drains.
+Fair-CI queue correction:
+- Removed the pending `phasei10d_off1m_long12m` tasks before launch.
+- Capped automatic promotion to seeds 1-5 so the daemon does not keep expanding
+  promising families to 10 seeds while the current comparison target is 5-seed
+  95% CI.
+- Fill priority is: `phasei10c` clean off-at-1M, `phasei9r` off-at-1M,
+  `phasei9t` off-at-1.5M, and `phasei9q` temp0.01/off-at-2M, because these are
+  the current Glass families with mean or early best above the TD-MPC2 baseline
+  region.
+- Added standard-budget CI fill tasks:
+  - `phasei10c_off1m_clean5`: seed 5 added; pending seeds 3-4 reprioritized.
+  - `phasei9r_p1b_off1m_fairci`: replacement seed 1 and new seed 5.
+  - `phasei9t_p1b_off1p5m_fairci`: seeds 1 and 5.
+  - `phasei9q_p1b_temp001_off2m_fairci`: replacement seeds 1 and 5 because the
+    prior seed 5 ran on the destroyed `ssh4_8080` worker.

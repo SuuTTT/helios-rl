@@ -174,7 +174,7 @@ task), run manually:
 
 ```bash
 for HOST_PORT in "ssh6.vast.ai:11115" "ssh6.vast.ai:16779" "78.83.187.54:17637" \
-                 "ssh1.vast.ai:34217" "ssh3.vast.ai:15229" "ssh3.vast.ai:11271"; do
+                 "ssh1.vast.ai:34217" "ssh3.vast.ai:11271"; do
   HOST="${HOST_PORT%%:*}"; PORT="${HOST_PORT##*:}"
   rsync -az --delete \
     -e "ssh -p $PORT -i /home/coder/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
@@ -289,5 +289,4 @@ Current fleet (2026-05-20):
 | ssh17637_gpu0 | 78.83.187.54 | 17637 | 3060 Laptop 6 GB (GPU 0) |
 | ssh17637_gpu1 | 78.83.187.54 | 17637 | 3060 Laptop 6 GB (GPU 1) |
 | ssh1_2080ti | ssh1.vast.ai | 34217 | RTX 2080 Ti |
-| ssh3_3070 | ssh3.vast.ai | 15229 | RTX 3070 |
 | ssh6_3080 | ssh6.vast.ai | 16779 | RTX 3080 |

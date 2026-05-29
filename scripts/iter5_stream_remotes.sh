@@ -66,9 +66,7 @@ while true; do
   # Mirror all remote boxes in parallel for speed.
   # sync_box 11271 ssh3.vast.ai (KILLED)          $MIRROR/ssh3_3060ti       &
   sync_box 11115 ssh6.vast.ai          $MIRROR/ssh6_4060         &
-  sync_box 17637 78.83.187.54          $MIRROR/ssh17637_2x3060   &
   sync_box 34217 ssh1.vast.ai          $MIRROR/ssh1_2080ti       &
-  sync_box 15229 ssh3.vast.ai          $MIRROR/ssh3_3070         &
   sync_box 16779 ssh6.vast.ai          $MIRROR/ssh6_3080         &
   sync_box 11271 ssh3.vast.ai          $MIRROR/ssh3_3060ti_new   &
   sync_box 17647 ssh9.vast.ai          $MIRROR/ssh9_4x2060       &
@@ -76,9 +74,7 @@ while true; do
 
   # summarize_box "ssh3_3060ti " $MIRROR/ssh3_3060ti (KILLED)
   summarize_box "ssh6_4060   " $MIRROR/ssh6_4060
-  summarize_box "ssh17637    " $MIRROR/ssh17637_2x3060
   summarize_box "ssh1_2080ti " $MIRROR/ssh1_2080ti
-  summarize_box "ssh3_3070   " $MIRROR/ssh3_3070
   summarize_box "ssh6_3080   " $MIRROR/ssh6_3080
   summarize_box "ssh3_3060ti " $MIRROR/ssh3_3060ti_new
   summarize_box "ssh9_4x2060 " $MIRROR/ssh9_4x2060

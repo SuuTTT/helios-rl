@@ -94,7 +94,7 @@ If that last line returns `[CpuDevice(id=0)]` or errors about cuSPARSE / `map_wi
 |---|---|---|
 | `ssh3:11271` (3060 Ti) | works, slow | Reliable but only ~100 sps. Use only when faster boxes are full. |
 | `ssh6:11115` (4060) | works | Sweet spot. Plenty of headroom at MEM=0.55. Driver 580 + CUDA 13 just works. |
-| `78.83.187.54:17637` (2× 3060 Laptop 6GB) | flaky | 6 GB shared → OOM-killed seeds. Use MEM=0.35 and don't run two heavy jobs |
+| `78.83.187.54:17637` (2× 3060 Laptop 6GB) | destroyed/retired | Removed from fleet 2026-05-27 after user destroyed the instance. Similar 6 GB shared/laptop boxes are best-effort only; retire if disconnected for 24h. |
 | `ssh8:37645` (4060) | recycled | vast.ai sometimes recycles instances mid-run. Save checkpoints frequently |
 | `ssh9:16233` (3090 24GB) | BLOCKED | Driver 535 too old for our JAX stack. **Don't rent 3090 instances with driver < 555** |
 | (RTX 5070 from earlier session) | BLOCKED | sm_120 + driver 570 can't run CUDA 13 wheels |

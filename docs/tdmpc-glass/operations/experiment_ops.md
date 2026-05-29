@@ -62,10 +62,7 @@ The `run_benchmark.py` launcher scripts set these automatically.
 |---|---|---|---|---|---|
 | `local` | — | 4070 Ti | 12 GB | 0.85 | local machine |
 | `ssh6_4060` | `ssh6.vast.ai:11115` | 4060 | 8 GB | 0.65 | |
-| `ssh17637_gpu0` | `78.83.187.54:17637` | 3060 (slot 0) | 6 GB | 0.65 | dual-GPU box |
-| `ssh17637_gpu1` | `78.83.187.54:17637` | 3060 (slot 1) | 6 GB | 0.65 | dual-GPU box |
 | `ssh1_2080ti` | `ssh1.vast.ai:34217` | 2080 Ti | 22 GB | 0.75 | |
-| `ssh3_3070` | `ssh3.vast.ai:15229` | 3070 | 8 GB | 0.75 | |
 | `ssh6_3080` | `ssh6.vast.ai:16779` | 3080 | 10 GB | 0.75 | |
 | `ssh3_3060ti` | `ssh3.vast.ai:11271` | 3060 Ti | 8 GB | 0.65 | |
 | `ssh9_2060_gpu0` | `ssh9.vast.ai:17647` | 2060 (slot 0) | 6 GB | 0.35 | 4-GPU box |
@@ -79,6 +76,17 @@ Removed workers:
 |---|---:|---|
 | `ssh4_8080` | `37565664` | destroyed after repeated PJRT pthread creation failures; cgroup `pids.max=256` is too low for this JAX workload |
 | `ssh4_3060_bar` | `37907664` | destroyed after repeated SSH banner timeouts and broken `rsync` during setup |
+| `ssh17637_gpu0` / `ssh17637_gpu1` | unknown | user destroyed on 2026-05-27; removed from dashboard and central queue dispatch |
+
+Fleet retirement rule:
+
+- If any Vast GPU slot is unreachable or disconnected for 24 consecutive hours,
+  stop assigning new tasks to it, mark any still-`running` queue entries on that
+  slot as failed with `failure_reason=box_disconnected_gt_24h`, sync whatever
+  logs are available, and destroy the instance from Vast.
+- Do not leave disconnected boxes in `scripts/task_queue_daemon.py` or
+  `scripts/web_dashboard.py`; stale fleet entries make the queue look busy and
+  can hide real idle capacity.
 
 **Tip**: the dashboard Box Fleet section shows live GPU%, mem, CPU%, running seed,
 best MPPI, ETA. Check there before SSHing.

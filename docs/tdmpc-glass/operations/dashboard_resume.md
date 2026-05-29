@@ -65,7 +65,6 @@ Currently-tracked boxes (must match `BOX_PORT`/`BOX_HOST`/`BOX_GPUMASK` in `iter
 | `ssh17637_gpu0` | `ssh17637_gpu0.queue` |
 | `ssh17637_gpu1` | `ssh17637_gpu1.queue` |
 | `ssh1_2080ti` | `ssh1_2080ti.queue` |
-| `ssh3_3070` | `ssh3_3070.queue` |
 | `ssh6_3080` | `ssh6_3080.queue` |
 
 ## What can break (and the fix)

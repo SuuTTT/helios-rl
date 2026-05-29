@@ -513,6 +513,8 @@ def train_tdmpc2(
     mpc_distill_anneal_steps: int = 3_000_000,
     mpc_distill_disable_gap: float = 100.0,
     mpc_distill_batch_size: int = 16,
+    controller_arbitration: str = "none",
+    arbitration_margin: float = 0.0,
 ) -> None:
     """Train TD-MPC2 or TD-MPC-Glass."""
     algo_name = "TD-MPC-Glass" if use_glass else "TD-MPC2"
@@ -1026,6 +1028,16 @@ def train_tdmpc2(
     _patience = max(int(early_stop_patience), 0)
     if _patience > 0:
         print(f"  Early-stop: will halt after {_patience:,} env-steps with no new best MPPI", flush=True)
+    _controller_arbitration = str(controller_arbitration or "none").lower()
+    _arbitration_margin = float(arbitration_margin)
+    if _controller_arbitration not in {"none", "eval_only"}:
+        raise ValueError(f"Unknown controller_arbitration={controller_arbitration!r}")
+    if _controller_arbitration == "eval_only":
+        print(
+            f"  Controller arbitration: eval_only, selecting MPPI only when "
+            f"MPPI > pi + {_arbitration_margin:.1f}. Replay collection is unchanged.",
+            flush=True,
+        )
     # Optional output-tag suffix so we can run multiple experiment phases
     # (e.g. phase1 / phase2) against the same env_id without clobbering files.
     _tag = os.environ.get("TDMPC_GLASS_OUTPUT_TAG", "").strip()
@@ -1263,12 +1275,28 @@ def train_tdmpc2(
             if env_steps >= next_eval:
                 ret, pi_diag = eval_pi(n_eps=5)
                 mppi_ret, mppi_diag = eval_mppi(n_eps=8 if use_glass else 3)
+                arb_ret = None
+                arb_selector = ""
+                arb_gap = float(mppi_ret) - float(ret)
+                if _controller_arbitration == "eval_only":
+                    if mppi_ret > ret + _arbitration_margin:
+                        arb_selector = "mppi"
+                        arb_ret = float(mppi_ret)
+                    else:
+                        arb_selector = "pi"
+                        arb_ret = float(ret)
                 elapsed = time.time() - t0
                 _pi_minus_mppi = float(ret) - float(mppi_ret)
                 _gap_marker = "  pi>>MPPI" if _pi_minus_mppi >= 100 else ("  MPPI>>pi" if _pi_minus_mppi <= -100 else "")
                 print(f"  step={env_steps:>9,}  pi_reward={ret:7.1f}"
                       f"  MPPI={mppi_ret:7.1f}"
                       f"  sps={env_steps/max(elapsed,1):.0f}{_gap_marker}", flush=True)
+                if arb_ret is not None:
+                    print(
+                        f"    arb eval: selected={arb_selector} reward={arb_ret:.1f} "
+                        f"mppi_minus_pi={arb_gap:.1f} margin={_arbitration_margin:.1f}",
+                        flush=True,
+                    )
                 if _mpc_distill_enabled:
                     _prev_gate = _mpc_gap_allows_distill
                     _mpc_gap_allows_distill = (_pi_minus_mppi < _mpc_distill_disable_gap)
@@ -1313,6 +1341,8 @@ def train_tdmpc2(
                     with open(eval_type_csv, "a") as cf:
                         cf.write(f"{env_steps},{ret:.1f},pi,{seed}\n")
                         cf.write(f"{env_steps},{mppi_ret:.1f},mppi,{seed}\n")
+                        if arb_ret is not None:
+                            cf.write(f"{env_steps},{arb_ret:.1f},arb,{seed}\n")
                     # §7.1 diagnostics CSV — sibling file, doesn't affect main eval CSV.
                     _diag_csv = eval_type_csv.with_name(eval_type_csv.name.replace(".csv", "_diag.csv"))
                     if not _diag_csv.exists():
@@ -1321,6 +1351,16 @@ def train_tdmpc2(
                     with open(_diag_csv, "a") as df:
                         df.write(f"{env_steps},pi,{seed},{pi_diag['full']:.4f},{pi_diag['stand']:.4f},{pi_diag['falls']},{pi_diag['ttf']}\n")
                         df.write(f"{env_steps},mppi,{seed},{mppi_diag['full']:.4f},{mppi_diag['stand']:.4f},{mppi_diag['falls']},{mppi_diag['ttf']}\n")
+                    if arb_ret is not None:
+                        _arb_csv = eval_type_csv.with_name(eval_type_csv.name.replace(".csv", "_arbitration.csv"))
+                        if not _arb_csv.exists():
+                            with open(_arb_csv, "w") as af:
+                                af.write("step,seed,pi_reward,mppi_reward,mppi_minus_pi,selected,reward,margin\n")
+                        with open(_arb_csv, "a") as af:
+                            af.write(
+                                f"{env_steps},{seed},{ret:.1f},{mppi_ret:.1f},{arb_gap:.1f},"
+                                f"{arb_selector},{arb_ret:.1f},{_arbitration_margin:.1f}\n"
+                            )
                 if ckpt_dir is not None:
                     ckpt_payload = {
                         "algo": "tdmpc-glass" if use_glass else "tdmpc2",
@@ -1339,6 +1379,14 @@ def train_tdmpc2(
                         "best_mppi": best_mppi,
                         "best_mppi_step": best_mppi_step,
                     }
+                    if arb_ret is not None:
+                        ckpt_payload.update(
+                            {
+                                "arbitration_reward": arb_ret,
+                                "arbitration_selector": arb_selector,
+                                "arbitration_margin": _arbitration_margin,
+                            }
+                        )
                     if mppi_ret > best_mppi:
                         best_mppi = mppi_ret
                         best_mppi_step = env_steps
@@ -1622,6 +1670,12 @@ def parse_args():
     ap.add_argument("--mpc_distill_batch_size", type=int, default=16,
                     help="Phase-mpc-lite: replay anchor batch size for planner targets per update cycle. "
                          "Small on purpose to keep MPPI target generation bounded.")
+    ap.add_argument("--controller_arbitration", choices=["none", "eval_only"], default="none",
+                    help="Iteration 10 i10-a1: log an eval-only arb series that chooses between pi and MPPI "
+                         "at each eval. This does not change data collection or replay. Default: none.")
+    ap.add_argument("--arbitration_margin", type=float, default=0.0,
+                    help="Iteration 10 i10-a1: with --controller_arbitration=eval_only, select MPPI only "
+                         "when MPPI reward exceeds pi reward by this margin. Default 0.")
     # Path P / Phase-P — cluster-entropy intrinsic reward (benchmark-fair, no env modification).
     ap.add_argument("--cluster_intrinsic_coef", type=float, default=0.0,
                     help="Path P: add coef * entropy(last W cluster ids) to training reward. Encourages "
@@ -1722,6 +1776,8 @@ def main():
                         mpc_distill_anneal_steps=args.mpc_distill_anneal_steps,
                         mpc_distill_disable_gap=args.mpc_distill_disable_gap,
                         mpc_distill_batch_size=args.mpc_distill_batch_size,
+                        controller_arbitration=args.controller_arbitration,
+                        arbitration_margin=args.arbitration_margin,
                     )
                 elif algo in ("tdmpc-glass", "tdmpc_glass"):
                     q_reset = None
@@ -1769,6 +1825,8 @@ def main():
                         mpc_distill_anneal_steps=args.mpc_distill_anneal_steps,
                         mpc_distill_disable_gap=args.mpc_distill_disable_gap,
                         mpc_distill_batch_size=args.mpc_distill_batch_size,
+                        controller_arbitration=args.controller_arbitration,
+                        arbitration_margin=args.arbitration_margin,
                     )
                 else:
                     print(f"Unknown algo: {algo}", flush=True)

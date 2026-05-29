@@ -32,12 +32,8 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 # (tag, port, host, gpu_idx)  port=None/host=None means local execution
 BOXES = [
     ("local",         None,    None,             0),
-    ("ssh17637_gpu0", 17637,  "78.83.187.54",   0),
-    ("ssh17637_gpu1", 17637,  "78.83.187.54",   1),
     ("ssh1_2080ti",   34217,  "ssh1.vast.ai",   0),
-    ("ssh3_3070",     15229,  "ssh3.vast.ai",   0),
     ("ssh6_3080",     16779,  "ssh6.vast.ai",   0),
-    ("ssh5_3060_bar", 27233,  "ssh5.vast.ai",   0),
     ("ssh9_2060_gpu0", 17647, "ssh9.vast.ai",   0),
     ("ssh9_2060_gpu1", 17647, "ssh9.vast.ai",   1),
     ("ssh9_2060_gpu2", 17647, "ssh9.vast.ai",   2),
@@ -47,10 +43,7 @@ BOXES = [
 # Per-box XLA_MEM override used when env doesn't already specify it.
 DEFAULT_MEM = {
     "local":         "0.85",
-    "ssh17637_gpu0": "0.35",
-    "ssh17637_gpu1": "0.35",
     "ssh1_2080ti":   "0.75",
-    "ssh3_3070":     "0.55",
     "ssh6_3080":     "0.65",
     "ssh5_3060_bar":  "0.65",
     "ssh9_2060_gpu0": "0.35",
@@ -59,8 +52,6 @@ DEFAULT_MEM = {
     "ssh9_2060_gpu3": "0.35",
 }
 CUDA_MASK = {
-    "ssh17637_gpu0": "CUDA_VISIBLE_DEVICES=0",
-    "ssh17637_gpu1": "CUDA_VISIBLE_DEVICES=1",
     "ssh9_2060_gpu0": "CUDA_VISIBLE_DEVICES=0",
     "ssh9_2060_gpu1": "CUDA_VISIBLE_DEVICES=1",
     "ssh9_2060_gpu2": "CUDA_VISIBLE_DEVICES=2",
@@ -400,7 +391,7 @@ def auto_promote_task(tasks: list[dict], task: dict, status: str) -> None:
     base_probe = env_map.get("PROBE_ID", task.get("id", "probe"))
     priority = int(task.get("priority", 7))
     added = 0
-    for seed in range(1, 11):
+    for seed in range(1, 6):
         if seed in existing:
             continue
         new_env = dict(env_map)

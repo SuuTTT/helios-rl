@@ -47,12 +47,8 @@ SSH_OPTS = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=ye
 BOXES = [
     # (tag, port, host, gpu_idx, label)
     ("local",         None,    None,             0, "Local 4070 Ti (12GB)"),
-    ("ssh17637_gpu0", 17637,   "78.83.187.54",   0, "78.83.187.54 GPU0 3060Lap (6GB)"),
-    ("ssh17637_gpu1", 17637,   "78.83.187.54",   1, "78.83.187.54 GPU1 3060Lap (6GB)"),
     ("ssh1_2080ti",   34217,   "ssh1.vast.ai",   0, "ssh1:34217 2080 Ti (22GB)"),
-    ("ssh3_3070",     15229,   "ssh3.vast.ai",   0, "ssh3:15229 3070 (8GB)"),
     ("ssh6_3080",     16779,   "ssh6.vast.ai",   0, "ssh6:16779 3080 (10GB)"),
-    ("ssh5_3060_bar", 27233,   "ssh5.vast.ai",   0, "ssh5:27233 3060 (12GB, bar)"),
     ("ssh9_2060_gpu0", 17647,  "ssh9.vast.ai",   0, "ssh9:17647 2060 GPU0 (6GB)"),
     ("ssh9_2060_gpu1", 17647,  "ssh9.vast.ai",   1, "ssh9:17647 2060 GPU1 (6GB)"),
     ("ssh9_2060_gpu2", 17647,  "ssh9.vast.ai",   2, "ssh9:17647 2060 GPU2 (6GB)"),
@@ -62,9 +58,6 @@ BOXES = [
 # Render workers scan the whole fleet dynamically. Keep local last so training
 # on the dashboard host is disturbed only when it is truly idle.
 RENDER_MEM_FRACTION = {
-    "ssh17637_gpu0": "0.75",
-    "ssh17637_gpu1": "0.75",
-    "ssh3_3070": "0.55",
     "ssh5_3060_bar": "0.65",
     "ssh6_3080": "0.65",
     "ssh1_2080ti": "0.75",
