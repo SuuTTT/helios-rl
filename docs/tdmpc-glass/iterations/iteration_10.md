@@ -635,6 +635,61 @@ Next probe backlog, not queued yet:
 Rationale: this keeps iteration fast but avoids mixing too many hypotheses
 before the first hierarchy/coarsening probes have even reached 2-4M steps.
 
+### Early-Spike Hypothesis Tests, 2026-05-30
+
+Observation:
+
+- Several runs enter a >500 reward basin extremely early:
+  - `phasei10a1_arb_m25` seed 1: `538.8@0.75M`,
+    `574.6@1.00M`, later `620.5@5.50M`;
+  - `phasei10k_k2_temp001` seed 3 rerun: `515.4@0.75M`,
+    `526.0@1.00M`, later `556.7@8.25M`;
+  - `phasei10p_k2_temp0005` seed 1: `505.6@1.25M`,
+    `537.1@1.50M`.
+- The effect is not yet robust. Follow-up `phasei10a1` seeds 2-5 are weak so
+  far, and `phasei10k` has mixed seeds.
+
+Working explanation:
+
+`K=2` Glass plus mild temp-stability appears to act as a coarse basin scaffold.
+If early exploration touches a hopping basin, the stable two-way latent split
+can preserve it and MPPI can amplify it. If the seed does not see that basin
+early, the run remains ordinary. Eval arbitration exposes the better controller
+when one exists, but does not by itself create better replay transitions.
+
+Hypotheses and tests:
+
+| Hypothesis | Prediction | Fast probes |
+|---|---|---|
+| H1: K2 scaffold matters | K2 beats K4 on >500-by-1M rate | `phasei10r` K2/temp0.01 vs `phasei10u` K4/temp0.01 |
+| H2: temp-stability matters | temp0.005/0.01 beat temp0.0 and temp0.02 | `phasei10r/s/t` plus `phasei10v` no-temp |
+| H3: MPPI amplifies a partial gait | high-NS MPPI variants spike more than low-NS | `phasei10r` NS=2048 vs `phasei10w` NS=512 |
+| H4: basin-entry luck is exploration-limited | longer exploration raises spike frequency | `phasei10r` expl25k vs `phasei10x` expl500k |
+
+Fast-test rule:
+
+- Use `TOTAL_STEPS=2000000` and evaluate at the existing 250k interval.
+- Primary metric: any eval reward >=500 by 1.0M.
+- Secondary metric: best reward by 2.0M.
+- Treat a family as promising only if >=2/5 seeds reach >500 by 1.0M, or if
+  >=3/5 reach >500 by 2.0M.
+
+Queued test batches:
+
+| Probe | Purpose | Seeds | Priority |
+|---|---|---:|---:|
+| `phasei10q_arb_m25_fast2m` | reproduce eval-arbitration early spike | 6-10 | 4 |
+| `phasei10r_k2_temp001_fast2m` | K2/temp0.01 without arbitration | 6-10 | 5 |
+| `phasei10s_k2_temp0005_fast2m` | lower temp-stability | 3-7 | 5 |
+| `phasei10t_k2_temp002_fast2m` | higher temp-stability | 1-5 | 6 |
+| `phasei10u_k4_temp001_fast2m` | K4 scaffold control | 1-3 | 5 |
+| `phasei10v_k2_notemp_fast2m` | no-temp control | 1-3 | 5 |
+| `phasei10w_k2_temp001_ns512_fast2m` | lower-MPPI-sample control | 1-3 | 5 |
+| `phasei10x_k2_temp001_expl500k_fast2m` | longer exploration control | 1-3 | 5 |
+
+Do not infer from single seed spikes. The decision should be based on spike-rate
+across these small batches.
+
 ### JEPA World Model Direction
 
 - [ ] Write JEPA-vs-TD-MPC2 world-model design note.
