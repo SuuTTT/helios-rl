@@ -61,10 +61,9 @@ The `run_benchmark.py` launcher scripts set these automatically.
 | Tag | SSH | GPU | VRAM | XLA_MEM | Notes |
 |---|---|---|---|---|---|
 | `local` | — | 4070 Ti | 12 GB | 0.85 | local machine |
-| `ssh6_4060` | `ssh6.vast.ai:11115` | 4060 | 8 GB | 0.65 | |
 | `ssh1_2080ti` | `ssh1.vast.ai:34217` | 2080 Ti | 22 GB | 0.75 | |
+| `ssh1_a4000` | `ssh1.vast.ai:24456` | A4000 | 16 GB | 0.75 | Python 3.11 + CUDA12 JAX validated on 2026-05-31 |
 | `ssh6_3080` | `ssh6.vast.ai:16779` | 3080 | 10 GB | 0.75 | |
-| `ssh3_3060ti` | `ssh3.vast.ai:11271` | 3060 Ti | 8 GB | 0.65 | |
 | `ssh9_2060_gpu0` | `ssh9.vast.ai:17647` | 2060 (slot 0) | 6 GB | 0.35 | 4-GPU box |
 | `ssh9_2060_gpu1` | `ssh9.vast.ai:17647` | 2060 (slot 1) | 6 GB | 0.35 | 4-GPU box |
 | `ssh9_2060_gpu2` | `ssh9.vast.ai:17647` | 2060 (slot 2) | 6 GB | 0.35 | 4-GPU box |

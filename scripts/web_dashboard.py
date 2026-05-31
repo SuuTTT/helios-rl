@@ -48,6 +48,7 @@ BOXES = [
     # (tag, port, host, gpu_idx, label)
     ("local",         None,    None,             0, "Local 4070 Ti (12GB)"),
     ("ssh1_2080ti",   34217,   "ssh1.vast.ai",   0, "ssh1:34217 2080 Ti (22GB)"),
+    ("ssh1_a4000",    24456,   "ssh1.vast.ai",   0, "ssh1:24456 A4000 (16GB)"),
     ("ssh6_3080",     16779,   "ssh6.vast.ai",   0, "ssh6:16779 3080 (10GB)"),
     ("ssh9_2060_gpu0", 17647,  "ssh9.vast.ai",   0, "ssh9:17647 2060 GPU0 (6GB)"),
     ("ssh9_2060_gpu1", 17647,  "ssh9.vast.ai",   1, "ssh9:17647 2060 GPU1 (6GB)"),
@@ -61,6 +62,7 @@ RENDER_MEM_FRACTION = {
     "ssh5_3060_bar": "0.65",
     "ssh6_3080": "0.65",
     "ssh1_2080ti": "0.75",
+    "ssh1_a4000": "0.75",
     "ssh9_2060_gpu0": "0.35",
     "ssh9_2060_gpu1": "0.35",
     "ssh9_2060_gpu2": "0.35",

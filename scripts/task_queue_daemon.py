@@ -33,6 +33,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 BOXES = [
     ("local",         None,    None,             0),
     ("ssh1_2080ti",   34217,  "ssh1.vast.ai",   0),
+    ("ssh1_a4000",    24456,  "ssh1.vast.ai",   0),
     ("ssh6_3080",     16779,  "ssh6.vast.ai",   0),
     ("ssh9_2060_gpu0", 17647, "ssh9.vast.ai",   0),
     ("ssh9_2060_gpu1", 17647, "ssh9.vast.ai",   1),
@@ -44,6 +45,7 @@ BOXES = [
 DEFAULT_MEM = {
     "local":         "0.85",
     "ssh1_2080ti":   "0.75",
+    "ssh1_a4000":    "0.75",
     "ssh6_3080":     "0.65",
     "ssh5_3060_bar":  "0.65",
     "ssh9_2060_gpu0": "0.35",
@@ -178,6 +180,10 @@ def launch_task(task: dict, tag: str, port: int, host: str):
     mem_key = "XLA_PYTHON_CLIENT_MEM_FRACTION"
     if mem_key not in env:
         env = f"{env} {mem_key}={DEFAULT_MEM.get(tag, '0.65')}"
+    if "MUJOCO_GL" not in env:
+        env = f"{env} MUJOCO_GL=egl"
+    if "PYOPENGL_PLATFORM" not in env:
+        env = f"{env} PYOPENGL_PLATFORM=egl"
     log(f"{tag} → launching task {task['id']}: {task['label']}")
 
     if tag == "local":

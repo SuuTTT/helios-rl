@@ -1,0 +1,10 @@
+task,seed,step,reward
+HopperHop,2,250112,0.0000
+HopperHop,2,500224,5.0842
+HopperHop,2,750080,3.3846
+HopperHop,2,1000192,25.8432
+HopperHop,2,1250048,39.8989
+HopperHop,2,1500160,106.4243
+HopperHop,2,1750016,47.9974
+HopperHop,2,2000128,115.7128
+HopperHop,5,250112,72.9188

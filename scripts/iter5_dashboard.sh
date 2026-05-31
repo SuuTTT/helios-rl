@@ -19,10 +19,13 @@ REPO=/root/helios-rl
 # 0 / 1. Empty/0 → query device 0.
 BOXES=(
   "local|||0|Local 4070 Ti (12GB)"
-  "ssh6_4060|11115|ssh6.vast.ai|0|ssh6:11115 4060 (8GB)"
   "ssh1_2080ti|34217|ssh1.vast.ai|0|ssh1:34217 2080 Ti (22GB)"
+  "ssh1_a4000|24456|ssh1.vast.ai|0|ssh1:24456 A4000 (16GB)"
   "ssh6_3080|16779|ssh6.vast.ai|0|ssh6:16779 3080 (10GB)"
-  "ssh3_3060ti|11271|ssh3.vast.ai|0|ssh3:11271 3060Ti (8GB)"
+  "ssh9_2060_gpu0|17647|ssh9.vast.ai|0|ssh9:17647 2060 GPU0 (6GB)"
+  "ssh9_2060_gpu1|17647|ssh9.vast.ai|1|ssh9:17647 2060 GPU1 (6GB)"
+  "ssh9_2060_gpu2|17647|ssh9.vast.ai|2|ssh9:17647 2060 GPU2 (6GB)"
+  "ssh9_2060_gpu3|17647|ssh9.vast.ai|3|ssh9:17647 2060 GPU3 (6GB)"
 )
 
 # ─── helpers run remotely via SSH. Single quoted -> sent as-is. ─────────
